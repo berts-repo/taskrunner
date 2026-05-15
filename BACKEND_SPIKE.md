@@ -1,10 +1,10 @@
 # Backend Spike
 
-Compare Claude Code and Codex before choosing the first worker backend.
+Compare Claude Code and Codex before choosing the worker starting point.
 
 ## Goal
 
-Identify which local coding-agent worker should be implemented first and what
+Identify which local coding-agent worker should be used as the starting point and what
 minimum worker-harness/task contract the project needs.
 
 ## Backends
@@ -23,7 +23,7 @@ For each backend, test:
 - Detect changed files.
 - Capture errors and exit status.
 - Observe approval behavior.
-- Check whether the interface is stable enough for the initial release.
+- Check whether the interface is stable enough for Taskrunner's worker harness.
 
 ## Suggested Test Task
 
@@ -135,10 +135,10 @@ availability, not container authentication.
 
 ### Recommendation
 
-- Recommended first worker: Codex if implementation starts before Claude usage
+- Recommended worker starting point: Codex if implementation starts before Claude usage
   resets.
 - Claude Code is viable in the intended Docker model after container auth setup.
-- Recommended next worker: Claude Code, or first-worker alternative if usage is available
+- Recommended additional worker: Claude Code, or alternative starting point if usage is available
   and file-edit/resume tests pass in Docker.
 - Worker harness interface should be shaped around:
   - start turn
@@ -173,8 +173,8 @@ After Claude usage resets, rerun inside the authenticated Docker worker:
 
 The spike should ultimately produce:
 
-- Recommended first worker
-- Recommended next worker
+- Recommended worker starting point
+- Recommended additional worker
 - Minimum worker harness interface
 - Minimum task record fields
 - Known risks

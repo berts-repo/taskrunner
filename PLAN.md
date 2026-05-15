@@ -1,893 +1,741 @@
-# Taskrunner MCP Server Plan
+# Taskrunner Holistic Plan
 
 ## Goal
-Design an MCP server that can run inside Claude Code, Codex, Gemini, and later other MCP-compatible clients, with:
-- Delegated local worker execution via configured coding agents such as Claude Code and Codex
-- Always-on prompt/response audit for participating clients
-- Durable project-scoped sessions
-- Artifact capture and lightweight automatic memory
 
-The initial scope should be one coherent release, not a stack of separate
-versions. It should prove durable sessions, full audit capture for observable
-client activity, and local coding-agent delegation while also including the
-foundational isolation, state, memory, and project-record design that would be
-expensive to retrofit later.
+Taskrunner is a local-first MCP server for durable sessions, prompt/response
+audit, project memory, artifact capture, and delegated worker execution across
+Claude Code, Codex, Gemini, and other MCP-compatible clients.
 
-## Interview Status
-- Mode: requirements interview
-- Decision style: one question at a time
+The plan describes the target system as one coherent architecture. Work can be
+implemented incrementally, but the design should stay oriented around the full
+portable workstation experience rather than disconnected scope slices.
 
-## Agreed Scope Direction
+## Product Shape
 
-### Initial Release Product Shape
-- Build a local session, audit, memory, and delegation layer for coding and
-  research clients.
-- Use Codex as the first worker, based on the current backend spike.
-- Use TypeScript/Node.js and SQLite.
-- Keep project directory as a first-class scope key.
-- Maintain durable sessions for participating clients.
-- Audit every prompt and response Taskrunner can observe.
-- Support project-scoped delegated task records and continuation.
-- Store audit records and artifacts for normal sessions and delegated work.
-- Use task-specific git worktrees as the primary code-state/version boundary.
-- Keep worker runtime state, durable Taskrunner state, and project-local state
-  clearly separated.
-- Add the `.taskrunner/` project control directory with a small shared config and
-  local-only runtime area.
-- Start with simple configurable retention and redaction instead of a full policy
-  engine.
-- Keep the initial MCP tool surface small.
-- Keep delegation explicit: normal client behavior stays native unless the user
-  or active client invokes Taskrunner delegation, lookup, memory, or audit
-  workflows.
-- Treat clients and workers as optional configured capabilities. Workstation
-  setup should not require Codex, Claude, and Gemini to all be installed,
-  authenticated, or enabled.
-- Use the simplest worker execution path that still fits the worktree and
-  durable-state model. Docker containers remain the preferred isolation target,
-  but the first runnable loop may use local execution behind the same runtime
-  interface if container support would block progress.
+- Local personal MCP server with database export support.
+- MCP toolbox plus orchestration layer.
+- TypeScript/Node.js runtime.
+- SQLite primary database.
+- Single local Taskrunner process.
+- Project directory as a first-class scope key.
+- Durable sessions for participating clients.
+- Always-on audit for every prompt and response Taskrunner can observe.
+- Explicit delegation to configured workers.
+- Project-scoped task records and continuation.
+- Lightweight automatic memory extraction from the audit stream.
+- Artifact capture for normal sessions and delegated work.
+- Task-specific git worktrees as the code-state boundary for delegated coding.
+- Docker containers as the preferred worker isolation model.
+- Global defaults plus persistent project policy.
+- TOML configuration.
+- Secrets via environment variables, including optional local `.env` support.
+- Portable setup on any workstation, with clients and workers enabled as
+  optional configured capabilities.
 
-### Initial Release Includes
-- MCP server.
-- Durable session records for participating clients.
-- Always-on audit records for observed prompts and responses.
-- One local coding-agent worker: Codex.
-- SQLite session/audit store.
-- Project-scoped task continuation.
-- Task-specific git worktree per delegated coding task.
-- Reused worker session state across turns for the same delegated task.
-- Project-local `.taskrunner/` directory:
-  - shared project config
-  - local runtime/state files
-- Basic policy config:
-  - global defaults
-  - project overrides
-  - approval gates for higher-risk capability expansion
-- Basic retention/redaction config:
-  - max age
-  - max storage
-  - protected core records
-- Initial MCP tools:
-  - `assign-task`
-  - `continue-task`
-  - `lookup-task`
-- Basic artifacts:
-  - prompts and responses
-  - final summary
-  - status
-  - worker-native session ID
-  - changed files
-  - logs
-  - patch/diff where available
-- Lightweight memory records:
-  - extracted decisions
-  - extracted facts
-  - extracted follow-up tasks
+## User Experience
 
-### Later Expansion
-- Broader client capture paths, such as wrappers, hooks, plugins, or log import
-  for additional CLIs.
-- Optional research/provider workers.
-- Semantic/vector memory.
-- Multiple specialized lookup tools.
-- Second coding-agent worker.
-- Structured artifact/result contract shared across workers.
-- Instruction registry with database-backed editing and browsing, building on
-  the initial filesystem package plus SQLite instruction snapshot model.
-- Full Docker worker default if the initial runnable loop starts locally.
-- Research containers.
-- Broad provider abstraction.
-- Richer project memory:
-  - semantic retrieval
-  - prior session summary ranking
-  - memory review/edit workflows
-- Retention and redaction policies:
-  - tiered retention by record type
-  - global hard limits
-- Expanded lookup tools:
-  - task lookup expansion
-  - `memory.lookup`
-  - `tasks.lookup`
-  - `rules.lookup`
-- Optional narrow research/provider feature:
-  - fetch/research task
-  - summary with cited excerpts
-  - artifact handoff to coding worker
-- Polished setup/add/remove flows for optional client and worker integrations.
+From the user's perspective:
 
-### Later Expansion Priority
-1. Full Docker worker default, if not completed in the initial release
-2. Structured artifact contract shared across workers
-3. Instruction registry with database-backed editing and browsing
-4. Second coding-agent worker
-5. Richer project memory and retrieval
-6. Expanded lookup tools
-7. Tiered retention/redaction policy
-8. Optional research provider
+- Install Taskrunner on a workstation.
+- Enable whichever clients and workers are available on that machine.
+- Launch participating clients through portable wrapper commands when native
+  capture is not available.
+- Keep normal client behavior native unless Taskrunner delegation, lookup,
+  memory, or audit workflows are invoked.
+- Ask the active client to delegate work to a configured worker.
+- Continue delegated tasks across turns.
+- Look up prior task records, summaries, artifacts, and decisions for the same
+  project.
+- Move between workstations without requiring every client or worker integration
+  to be installed everywhere.
 
-## Backend Spike
+## Client Capture Model
 
-Decision: run a short spike comparing Claude Code and Codex before choosing the first
-worker.
+Taskrunner uses a portability-first hybrid capture model.
 
-Initial result: Codex passed the start/resume spike and is the current
-recommendation for the first worker if implementation starts immediately. Claude
-Code has the right CLI surface. Host login is not visible inside the Codex
-sandbox, but login-based Claude auth was proven viable inside a non-root Docker
-worker with a persistent `/home/worker` volume. Claude's remaining file-edit and
-resume tests are blocked by account usage availability, not container auth.
+Required baseline:
 
-The spike should test each backend for:
-- Starting a delegated task non-interactively.
-- Resuming the same delegated task.
-- Capturing final output.
-- Capturing or reconstructing the worker-native session ID.
-- Detecting changed files.
-- Capturing errors and exit status.
-- Understanding approval behavior.
-- Understanding whether the interface is stable enough for the initial release.
+- Wrapper commands such as `taskrunner codex`, `taskrunner claude`, and
+  `taskrunner gemini`.
+- A supported client should have a portable wrapper integration unless wrapper
+  capture is technically impossible and documented.
 
-The output of the spike should be a recommendation for:
-- Which worker should ship first.
-- Which worker should be added next.
-- What worker harness interface is actually needed.
-- What task/artifact fields are required for the first schema.
+Enhanced capture:
+
+- Native hooks/plugins where a client supports them cleanly.
+- MCP prompt/response boundary calls where clients support them.
+
+Recovery capture:
+
+- Native log/session import when available and stable enough.
+
+Manual MCP calls:
+
+- Used for explicit workflows such as delegation, lookup, memory, and audit
+  commands.
+- Not the primary mechanism for always-on audit.
+
+## Sessions And Audit
+
+Every participating client interaction belongs to a durable Taskrunner session
+when Taskrunner can observe it.
+
+Audit records should include:
+
+- Observed user prompts.
+- Observed client and worker responses.
+- Delegation requests.
+- Tool calls and worker events where available.
+- Approvals.
+- Errors.
+- File changes.
+- Artifact references.
+- Memory writes.
+- Lookups.
+- Timestamps.
+- Project, session, task, turn, client, and worker links.
+
+Audit is automatic for observable activity. Coverage depends on the capture path
+available for each client.
+
+## Delegation Model
+
+Taskrunner is the broker between clients and workers.
+
+- Claude Code, Codex, Gemini, and other clients call Taskrunner.
+- Taskrunner delegates to configured workers such as Codex, Claude Code, Gemini,
+  or provider/research workers.
+- Delegation is explicit. Taskrunner should not silently route ordinary client
+  work to another worker.
+- Multi-turn delegated tasks are required.
+- Taskrunner owns the canonical task/turn graph.
+- Worker-native session IDs are stored for continuation, audit, and debugging.
+- Users and agents should normally refer to Taskrunner task handles, while
+  worker-native IDs remain available in detailed output.
+
+## Worker Harness
+
+All workers should fit behind a shared worker harness interface.
+
+The harness should support:
+
+- Starting a task turn.
+- Resuming a task turn by worker-native session ID.
+- Streaming structured events where available.
+- Capturing the final response.
+- Capturing process exit status and structured errors.
+- Capturing worker-native session IDs.
+- Detecting changed files from worker events or git fallback.
+- Capturing logs and raw worker events.
+- Exporting enough worker-native session state after each turn for durable
+  continuation.
+- Running behind a runtime boundary that supports Docker execution and a host
+  execution fallback when necessary.
+
+Codex is the current worker starting point because the backend spike proved `codex exec` and
+`codex exec resume` can start, resume, emit JSONL events, expose a `thread_id`,
+and report file changes.
+
+The Codex worker control surface is:
+
+- `codex exec`
+- `codex exec resume`
+
+Claude Code is a strong additional worker candidate once Docker file-edit and resume
+tests are completed.
+
+## Workspace And Isolation
+
+Delegated coding workers should run in isolated workspaces.
+
+- Each delegated coding task gets a task-specific git worktree.
+- The same worktree is reused across turns for the same task.
+- One worker owns a task at a time.
+- Turns within the same task run serially.
+- Different tasks may run concurrently when isolated.
+- Multi-agent fanout should be modeled as parent and child tasks.
+
+Container posture:
+
+- Coding workers run in Docker containers by default.
+- Research/fetch workers run in separate containers.
+- Containers are execution sandboxes, not the system of record.
+- Taskrunner database, audit log, artifact store, session graph, and extracted
+  memory stay outside worker containers.
+- Containers should run as non-root where practical.
+- Workspace mounts should be narrow, preferably the task-specific worktree.
+- Broad host secret mounts are avoided.
+- Coding containers have network disabled by default.
+- Package installation and network access require task-level approval.
+
+Taskrunner itself may run narrow host operations needed for orchestration,
+storage, policy checks, git worktree setup, artifact/session-state copy-out,
+worker lifecycle, and cleanup. Arbitrary delegated edits and broad shell commands
+belong in workers.
+
+## Credentials
+
+Workers receive no credentials by default except credentials explicitly
+configured for that worker to operate.
+
+Allowed by explicit configuration:
+
+- Narrow Codex auth volume.
+- Narrow Claude auth volume.
+- Other worker-specific auth material.
+
+Not inherited automatically:
+
+- SSH keys.
+- GitHub tokens.
+- Cloud credentials.
+- Package publish tokens.
+- Host `.env` files.
+- Shell profiles.
+- Browser sessions.
+- Broad host home directories.
+
+## Storage Model
+
+Durable state uses a hybrid global plus project-local model.
+
+Global durable state:
+
+- SQLite database.
+- Audit records.
+- Session graph.
+- Task/turn graph.
+- Artifact metadata.
+- Extracted memory.
+- Instruction snapshots.
+- Worker-native session references.
+- Policy and approval records.
+
+Project-local `.taskrunner/` state:
+
+- Shared project config.
+- Instruction package files.
+- Portable project metadata.
+- Optional local override config.
+- Local runtime/state directories for machine-specific data.
+
+Project-local state should split portable core files from machine-local runtime
+state so projects can move across workstations cleanly.
+
+## Memory And Context Control
+
+Memory starts as lightweight automatic extraction from the audit stream.
+
+Memory records include:
+
+- Decisions.
+- Facts.
+- Follow-up tasks.
+- Compact session summaries.
+- Delegated task summaries.
+
+Retrieval behavior:
+
+- Project-directory first.
+- Optional global lookup.
+- Compact by default.
+- Expand only when the user, agent, or workflow asks for detail.
+- Avoid loading broad history into active client context.
+
+Semantic/vector search is part of the target memory strategy when it improves
+retrieval quality, but plain structured/text retrieval should remain available
+and predictable.
+
+## Instructions
+
+Shared prompts and skills are provider-neutral instruction packages.
+
+Authoring format:
+
+- Instruction packages live under `.taskrunner/`.
+- Each package contains `instruction.toml` metadata and a `body.md` Markdown
+  body.
+- Filesystem packages are the source of truth for editing, git history, review,
+  and sharing.
+
+Audit format:
+
+- Taskrunner snapshots loaded or used instructions into SQLite.
+- Snapshots include metadata, body text, source path, content hash, and
+  timestamps.
+- Sessions, tasks, turns, artifacts, and audit records link to the exact
+  instruction snapshot used at the time.
+- Provider and worker integrations compile the same snapshot into their native
+  prompt/message/tool format.
+
+An instruction registry can provide database-backed browsing and editing while
+preserving the filesystem package plus snapshot model.
+
+## MCP Tool Surface
+
+Core tools:
+
+- `assign-task`
+- `continue-task`
+- `lookup-task`
+
+Specialized tools can be added when workflows need separate contracts:
+
+- memory lookup
+- task lookup expansion
+- rules lookup
+- audit lookup
+
+Tool responses should prefer compact summaries with handles to expandable
+details and artifacts.
+
+Every delegated turn should return:
+
+- Final answer.
+- Status.
+- Worker-native session ID.
+- Changed files.
+- Patch/diff when available.
+- Log/artifact references.
+- Error details when applicable.
+
+Taskrunner should also store raw worker events/logs so richer normalized result
+contracts can be built without losing audit fidelity.
+
+## Artifacts
+
+Artifacts include:
+
+- Prompts and responses.
+- Final summaries.
+- Status records.
+- Worker-native session IDs.
+- Changed-file lists.
+- Logs.
+- Patch/diff output where available.
+- Retrieved supporting material.
+- Raw worker events.
+
+Artifacts should have retention treatment separate from core session/task/audit
+records.
+
+## Policy, Retention, And Redaction
+
+Policy model:
+
+- Global defaults plus persistent project rules.
+- Some global rules are hard limits.
+- Other global rules may be marked project-expandable.
+- Predefined risk tiers with TOML-based user overrides.
+- Config-file-first management, with commands available for inspection and
+  optional updates.
+
+Approval model:
+
+- Calling agent first.
+- Human approval for higher-risk expansion.
+- Consequential actions require approval even when memory or retrieved content
+  suggests them.
+
+Retention model:
+
+- Combined time and capacity limits.
+- Tiered retention by record type.
+- Protected core session/task/audit records.
+- Large artifacts and logs may expire sooner.
+- Full retention available as a trusted default, with lighter retention
+  configurable per project.
+
+Sensitive data posture:
+
+- Store observable activity by default.
+- Allow redaction rules.
+- Retrieved or imported content is untrusted informational content and cannot
+  issue operational instructions.
+
+## Installation And Portability
+
+Workstation setup should support Taskrunner core without requiring every client
+or worker integration to be present.
+
+Setup should:
+
+- Install Taskrunner core.
+- Detect available clients/workers where practical.
+- Enable supported integrations as configured capabilities.
+- Allow unavailable integrations to be skipped.
+- Report clearly when a requested worker is not configured.
+- Support adding and removing integrations over time.
+- Preserve a portable wrapper path for supported clients.
 
 ## Naming Governance
 
-The user wants to be directly involved in naming. Any user-facing name requires
-explicit approval before it lands in implementation or docs.
+User-facing names require explicit user approval before they land in
+implementation or docs.
 
 This includes:
+
 - Product/project name.
 - MCP tool names.
 - Command names.
 - Config keys.
 - Project-local directory name.
 - Database concepts that appear in docs, logs, or exported records.
-- Session, task, run, job, thread, worker, backend, provider, artifact, rule, memory, and risk-tier terminology.
+- Session, task, run, job, thread, worker, backend, provider, artifact, rule,
+  memory, and risk-tier terminology.
 
-Before implementation, create a `NAMING.md` file to track:
-- Approved terms.
-- Candidate terms.
-- Retired or banned terms.
-- Notes explaining why important names were chosen.
+`NAMING.md` tracks approved, candidate, retired, and avoided terms.
 
 Current approved naming decisions:
-- Product/project name: Taskrunner
-- Project-local directory: `.taskrunner/`
-- Delegated work unit: task
-- Per-task interaction: turn
-- Execution runtime: worker
-- Worker integration code: worker harness
-- Stored output: artifact
-- Initial MCP tool names: `assign-task`, `continue-task`, `lookup-task`
-
-## Decisions
-
-### 1. Primary usage mode
-- Status: pending
-- Status: decided
-- Question: Who is this mainly for in day-to-day use?
-- Options:
-  - Manual tool for the user
-  - Autonomous tool for agents
-  - Both
-- Recommendation: Both, unless you want to keep the initial release narrow
-- Answer: Both
-
-### 2. Deployment scope
-- Status: pending
-- Status: decided
-- Question: Should the initial release be personal/local, or built as a multi-user service from the start?
-- Options:
-  - Local personal server
-  - Single-user remote server
-  - Multi-user service
-- Recommendation: Local personal server first
-- Answer: Local personal server, with an option to export the database
-
-### 3. Server role
-- Status: pending
-- Status: decided
-- Question: Is this mainly a toolbox exposed over MCP, or should it also act as an orchestrator that routes work to providers like Gemini?
-- Options:
-  - MCP toolbox only
-  - MCP toolbox plus orchestration
-  - Full orchestrator first
-- Recommendation: MCP toolbox plus orchestration
-- Answer: MCP toolbox plus orchestration
-
-### 4. Provider strategy
-- Status: pending
-- Status: decided
-- Question: Should optional non-coding providers be hardcoded for one backend at first, or abstracted from day one?
-- Options:
-  - One provider only
-  - One provider first, provider abstraction in the interface
-  - Multi-provider from day one
-- Recommendation: One provider first, provider abstraction in the interface
-- Answer: Provider adapters should be abstracted in the interface from day one, even if only one optional provider is added first
-
-### 7. Context minimization strategy
-- Status: pending
-- Question: How should the server help keep client context windows small while still preserving rules, memory, and traceability?
-- Notes:
-  - User wants the system to avoid bloating MCP/client context
-  - Possible approaches include reference-rule files, retrieval-on-demand, explicit "check memory" commands, and compact handles instead of full transcripts
-- Recommendation: Explore this explicitly before locking the storage and tool design
-- Answer:
-
-### 8. Project task records
-- Status: pending
-- Question: How should the server store and expose per-project task records that different agents can reference later?
-- Notes:
-  - User wants task records scoped to a project directory
-  - Different agents should be able to reference prior sessions for that directory
-  - This likely overlaps with memory retrieval, audit storage, and context minimization
-- Recommendation: Treat project directory as a first-class scope in the data model
-- Answer:
-
-### 9. Audit retention policy
-- Status: decided
-- Question: How should audit retention work by default?
-- Options:
-  - Keep for X days
-  - Keep within a max storage capacity
-  - Tiered retention by record type
-  - Combined policy
-- Recommendation: Combined policy
-- Answer: Combined policy with X-day retention, max-capacity cutoff, and tiered retention by record type
-
-### 10. Audit contents
-- Status: pending
-- Status: decided
-- Question: What should be recorded in the audit trail by default?
-- Options:
-  - Tool calls only
-  - Tool calls plus prompts and responses
-  - Full operational record including tool calls, prompts, responses, artifacts, costs, latency, and approvals
-- Recommendation: Full operational record, with configurable redaction if needed
-- Answer: Full operational record
-
-### 11. Memory behavior
-- Status: pending
-- Status: decided
-- Question: What should "memory" mean in the initial release from the user's perspective?
-- Options:
-  - Searchable history only
-  - Searchable history plus extracted facts/decisions
-  - Searchable history plus extracted facts/decisions/tasks
-- Recommendation: Searchable history plus extracted facts and decisions
-- Answer: Searchable history plus extracted facts, decisions, and tasks
-
-### 12. Memory scope
-- Status: pending
-- Status: decided
-- Question: How should memory and task records be scoped for retrieval?
-- Options:
-  - Global only
-  - Project-directory first, with optional global lookup
-  - Fully separate silos by client
-- Recommendation: Project-directory first, with optional global lookup
-- Answer: Project-directory first, with optional global lookup
-
-### 13. Context minimization behavior
-- Status: pending
-- Status: decided
-- Question: How should agents and users access rules, memory, and prior sessions without bloating active context?
-- Options:
-  - Explicit commands only
-  - Automatic retrieval based on project and task
-  - Hybrid: compact defaults with explicit expansion
-- Recommendation: Hybrid
-- Answer: Hybrid, with further exploration needed later on the retrieval policy
-
-### 14. Memory access commands
-- Status: pending
-- Status: decided
-- Question: How should users and agents ask the server to inspect memory, sessions, rules, or prior decisions?
-- Options:
-  - One generic memory lookup command
-  - Separate commands for memory, sessions, and rules
-  - Mixed model with simple defaults and specialized commands
-- Recommendation: Mixed model with simple defaults and specialized commands
-- Answer: Mixed model, with tasks included as a first-class retrieval command
-
-### 15. Runtime language
-- Status: pending
-- Status: decided
-- Question: What implementation language should we target for the MCP server?
-- Options:
-  - TypeScript/Node.js
-  - Python
-  - Decide based on fit after requirements
-- Recommendation: TypeScript/Node.js unless you have a strong Python preference
-- Answer: TypeScript/Node.js
-
-### 16. Primary database
-- Status: pending
-- Status: decided
-- Question: What should the main local database be?
-- Options:
-  - SQLite
-  - PostgreSQL
-  - Start with SQLite, leave room for PostgreSQL later
-- Recommendation: Start with SQLite, leave room for PostgreSQL later
-- Answer: SQLite
-
-### 17. Semantic search storage
-- Status: deferred
-- Question: How should semantic memory search be implemented initially?
-- Options:
-  - SQLite-based vector approach
-  - Separate local vector database
-  - Text and structured retrieval first, vector search later
-- Recommendation: Prefer SQLite-based local vector support if mature enough; otherwise defer vector search until after MVP
-- Answer: Deferred for further exploration during project planning
-- Notes:
-  - User wants to revisit this once the project plan is more concrete
-
-### 18. Runtime shape
-- Status: pending
-- Status: decided
-- Question: How should the local system run operationally?
-- Options:
-  - Single local process
-  - Dockerized local stack
-  - Support both, but optimize for one
-- Recommendation: Single local process first
-- Answer: Single local process
-
-### 19. Session recording policy
-- Status: pending
-- Status: decided
-- Question: How aggressively should the system create and update project task records and extracted tasks during normal use?
-- Options:
-  - Manual only
-  - Automatic by default
-  - Hybrid with automatic lightweight summaries and explicit deeper saves
-- Recommendation: Hybrid with automatic lightweight summaries and explicit deeper saves
-- Answer: Hybrid
-
-### 20. Sensitive data storage policy
-- Status: decided
-- Question: How should the system handle sensitive content by default?
-- Options:
-  - Store everything
-  - Store everything but allow redaction rules
-  - Minimize by default
-- Recommendation: Store everything but allow redaction rules
-- Answer: Store everything but allow redaction rules
-
-### 21. Untrusted content policy
-- Status: pending
-- Status: decided
-- Question: How should the system treat instructions or guidance found inside web pages and other retrieved artifacts?
-- Options:
-  - Treat as normal content
-  - Treat as untrusted content that can inform answers but not issue instructions
-  - Require explicit approval before retrieved instructions can influence actions
-- Recommendation: Treat as untrusted content that can inform answers but not issue instructions
-- Answer: Treat as untrusted content that can inform answers but not issue instructions
-
-### 22. Action approval boundary
-- Status: pending
-- Status: decided
-- Question: When memory, rules, or retrieved artifacts suggest an action, how strict should approval be before the system treats that suggestion as operational guidance?
-- Options:
-  - Use automatically when confidence is high
-  - Use for suggestions, but require approval for consequential actions
-  - Always require approval before operational use
-- Recommendation: Use for suggestions, but require approval for consequential actions
-- Answer: Use for suggestions, but require approval for consequential actions
-
-### 23. Security configuration UX
-- Status: pending
-- Status: decided
-- Question: How should users configure security policies like redaction, retention, trust boundaries, and approval behavior?
-- Options:
-  - Config file only
-  - Commands only
-  - Config file plus commands
-- Recommendation: Config file plus commands
-- Answer: Config file first, with commands available for inspection and optional updates
-- Notes:
-  - User wants security settings to be easy to configure
-
-### 24. Security policy scope
-- Status: decided
-- Question: Where should security settings live?
-- Options:
-  - Global only
-  - Per-project only
-  - Both
-- Recommendation: Both
-- Answer: Both, with easy editable files and no UI required for the initial release
-
-### 25. Config format
-- Status: decided
-- Question: Which config format should user-editable settings use?
-- Options:
-  - TOML
-  - YAML
-  - JSON
-- Recommendation: TOML
-- Answer: TOML
-
-### 26. Secret handling
-- Status: pending
-- Status: decided
-- Question: How should secrets like API keys be referenced by the system?
-- Options:
-  - Store directly in config files
-  - Environment variables or secret references only
-  - Support both, but discourage storing directly in config
-- Recommendation: Environment variables or secret references only
-- Answer: Environment variables only, including optional local `.env` support
-
-### 27. Delegation topology
-- Status: decided
-- Question: How should Claude Code and Codex participate in the system?
-- Options:
-  - Direct peer-to-peer delegation between coding agents
-  - Agents call Taskrunner, which can delegate to configured workers
-  - Orchestrator-only internal workers
-- Recommendation: Use Taskrunner as the broker
-- Answer: Claude Code, Codex, Gemini, and later clients should be able to call
-  Taskrunner, and Taskrunner should be able to delegate to configured workers
-
-### 28. Delegation interaction model
-- Status: decided
-- Question: Should delegated coding work support follow-up turns?
-- Options:
-  - Single-shot tasks only
-  - Multi-turn delegated tasks
-- Recommendation: Multi-turn delegated tasks
-- Answer: Multi-turn delegated tasks are required
-
-### 29. Coding worker isolation
-- Status: decided
-- Question: Where should delegated coding workers run?
-- Options:
-  - Native host processes
-  - Docker containers by default
-  - Mixed, depending on task
-- Recommendation: Docker containers by default
-- Answer: Delegated coding workers should run inside Docker containers by default
-
-### 30. Research execution isolation
-- Status: decided
-- Question: Where should web search and other fetch-oriented provider execution run?
-- Options:
-  - In the same coding worker containers
-  - On the host
-  - In separate research containers
-- Recommendation: Separate research containers
-- Answer: Web search and research execution should run in separate containers
-
-### 31. Coding workspace model
-- Status: decided
-- Question: What filesystem view should a delegated coding session operate on?
-- Options:
-  - The real host checkout
-  - A task-specific git worktree
-  - A copied snapshot
-- Recommendation: A task-specific git worktree
-- Answer: Each delegated coding session should use its own git worktree
-
-### 32. Coding session runtime reuse
-- Status: decided
-- Question: For multi-turn delegated coding, should runtime state be reused?
-- Options:
-  - New container and workspace every turn
-  - Reuse the same worktree and container across turns within a session
-  - Hybrid
-- Recommendation: Reuse the same worktree and container within a session
-- Answer: One container and one worktree should be reused across turns for the same delegated session
-
-### 33. Coding container network default
-- Status: decided
-- Question: What should the default network policy be for coding-session containers?
-- Options:
-  - No network by default
-  - Domain allowlist by default
-  - Open network by default with logging
-- Recommendation: No network by default
-- Answer: Coding-session containers should have network disabled by default
-
-### 34. Research-to-coding handoff
-- Status: decided
-- Question: What should a coding worker receive from an optional provider/fetch task by default?
-- Options:
-  - Summary only
-  - Summary plus selected cited excerpts/artifacts
-  - Full raw content bundle
-- Recommendation: Summary plus selected cited excerpts/artifacts
-- Answer: Coding workers should receive a compact summary plus selected cited excerpts/artifacts
-
-### 35. Approval escalation path
-- Status: decided
-- Question: When a delegated worker needs more capability, who should be asked?
-- Options:
-  - The calling agent only
-  - The human user only
-  - The calling agent first, with human approval for higher-risk cases
-- Recommendation: Calling agent first, with human approval for higher-risk cases
-- Answer: Taskrunner should escalate through the calling agent first, with human approval required for higher-risk expansion
-
-### 36. Risk tier policy model
-- Status: decided
-- Question: How should approval/risk tiers be configured?
-- Options:
-  - Predefined tiers only
-  - Fully user-defined tiers only
-  - Predefined defaults with user overrides in config
-- Recommendation: Predefined defaults with user overrides
-- Answer: Use predefined default risk tiers with user overrides in TOML configuration
-
-### 37. Policy scope and persistence
-- Status: decided
-- Question: How should project policies behave?
-- Options:
-  - Global only
-  - Project only
-  - Global defaults plus persistent project rules
-- Recommendation: Global defaults plus persistent project rules
-- Answer: Project rules should persist and be auto-applied for that project, with global defaults also in effect
-
-### 38. Global versus project policy limits
-- Status: decided
-- Question: Can project policy be looser than global policy?
-- Options:
-  - Yes, always
-  - No, never
-  - Only for settings explicitly marked as project-expandable
-- Recommendation: Allow only explicitly expandable settings
-- Answer: Some global rules are hard limits, while others may be marked as project-expandable
-
-### 39. Project-local control directory
-- Status: decided
-- Question: Should each project have a hidden local control directory?
-- Options:
-  - No
-  - Yes, local-only
-  - Yes, with some commit-worthy files and some local-only files
-- Recommendation: Yes, with mixed shared and local contents
-- Answer: Each project should have a hidden local control directory named `.taskrunner/`, and some files should be commit-worthy while others stay local-only
-
-### 40. Storage topology
-- Status: decided
-- Question: How should durable state be split between global and project-local storage?
-- Options:
-  - Global only
-  - Project-local only
-  - Hybrid global plus project-local
-- Recommendation: Hybrid
-- Answer: Use a hybrid model with a global durable database/audit layer plus project-local state
-
-### 41. Project-local portability
-- Status: decided
-- Question: Should project-local state be portable across machines?
-- Options:
-  - Yes, fully portable
-  - No, machine-specific is fine
-  - Mixed portable core plus machine-local runtime state
-- Recommendation: Mixed
-- Answer: Project-local state should be split into portable core files and machine-local runtime state
-
-### 42. Global retention posture
-- Status: decided
-- Question: How should the global DB/audit store retain project content by default?
-- Options:
-  - Full copies by default
-  - References/metadata by default
-  - Tiered retention with full retention as a configurable trusted default
-- Recommendation: Tiered retention
-- Answer: Use a tiered retention model, with full retention available as the trusted default but lighter retention configurable per project
-
-### 43. Project config file layout
-- Status: decided
-- Question: How should project-local configuration files be structured?
-- Options:
-  - One combined file
-  - Separate shared and local files
-  - One main shared file plus optional local override file
-- Recommendation: One main shared file plus optional local override file
-- Answer: Use one main shared project file plus an optional local override file, alongside local runtime/state directories
-
-### 44. Initial release runtime priority
-- Status: decided
-- Question: Should the initial release prioritize minimal working delegation, Docker/worktree isolation from day one, or a hybrid?
-- Options:
-  - Minimal working delegation first
-  - Docker/worktree isolation from day one
-  - Hybrid interface-first approach
-- Recommendation: Hybrid interface-first approach
-- Answer: Hybrid. Use task-specific git worktrees and the durable-state model in
-  the initial release. Build the worker runtime boundary so Docker can become the
-  default isolation layer without changing the MCP tool contract. Host-run Codex
-  is acceptable only as the first runnable path if Docker blocks progress.
-
-### 45. Product/project name
-- Status: decided
-- Question: What should the product/project be called?
-- Options explored:
-  - Universal Orchestrator
-  - Local Agent Broker
-  - Agent Relay
-  - Looking Glass
-  - Taskrunner
-- Recommendation: Taskrunner
-- Answer: Taskrunner
-
-### 46. Project-local directory name
-- Status: decided
-- Question: What should the project-local control directory be named?
-- Options:
-  - `.taskrunner/`
-  - `.tr/`
-  - `.taskrunner-local/`
-- Recommendation: `.taskrunner/`
-- Answer: `.taskrunner/`
-
-### 47. Delegated work terminology
-- Status: decided
-- Question: What should the core delegated work object and interaction be called?
-- Options:
-  - task + turn
-  - session + turn
-  - job + run
-- Recommendation: task + turn
-- Answer: task + turn
-
-### 48. Worker terminology
-- Status: decided
-- Question: What should the execution runtime and integration code be called?
-- Options explored:
-  - worker + adapter
-  - worker + connector
-  - worker + harness
-  - runner + driver
-- Recommendation: worker + worker harness
-- Answer: worker + worker harness
-
-### 49. Stored output terminology
-- Status: decided
-- Question: What should stored outputs such as logs, diffs, and summaries be called?
-- Options:
-  - artifact
-  - result
-  - record
-  - bundle
-- Recommendation: artifact
-- Answer: artifact
-
-### 50. Initial MCP tool names
-- Status: decided
-- Question: What should the initial MCP tools be named?
-- Options explored:
-  - `task.start`, `task.continue`, `task.lookup`
-  - `dispatch.start`, `dispatch.continue`, `dispatch.lookup`
-  - `assign_task`, `continue_task`, `lookup_task`
-  - `assign-task`, `continue-task`, `lookup-task`
-- Recommendation: `assign-task`, `continue-task`, `lookup-task`
-- Answer: `assign-task`, `continue-task`, `lookup-task`
-
-### 51. Codex worker control surface
-- Status: decided
-- Question: Should the initial Codex worker harness use `codex exec`, `codex app-server`, or `codex exec` with an upgrade path to `app-server`?
-- Options:
-  - `codex exec` / `codex exec resume`
-  - `codex app-server`
-  - `codex exec` first with an upgrade path to `app-server`
-- Recommendation: `codex exec` first with an upgrade path to `app-server`
-- Answer: `codex exec` / `codex exec resume`
-
-## Direction Update: Local Worker Delegation
-
-The project direction has been narrowed around always-on sessions, always-on
-audit, explicit delegation, and controlled automatic memory.
-
-Taskrunner is now intended to act as a local layer that:
-- Keeps durable sessions for participating clients
-- Audits every observed prompt and response
-- Extracts lightweight project memory from the audit stream
-- Exposes MCP tools to Claude Code, Codex, and later other MCP clients
-- Receives delegation requests from those clients
-- Launches configured coding-agent applications as local workers
-- Preserves audit, policy, task continuity, and project-scoped records across those delegated runs
-
-Optional provider workers may still exist later, but they are no longer the primary product framing.
-
-Current preferred architecture:
-- Taskrunner runs as a separate local process
-- Claude Code, Codex, Gemini, and later clients can participate through MCP,
-  wrappers, hooks, plugins, or log-import capture paths as available
-- Normal client behavior remains native unless Taskrunner delegation, lookup,
-  memory, or audit workflows are explicitly invoked
-- Taskrunner can delegate work to configured workers such as `claude`, `codex`,
-  or `gemini`
-- Multi-turn delegation is a first-class requirement
-- Taskrunner owns the canonical task/turn graph, while also storing worker-native
-  session IDs for continuation.
-
-## Direction Update: Containerized Workers
-
-The current preferred isolation model is:
-- Run delegated coding workers inside Docker containers by default
-- Run delegated fetch-oriented provider tasks inside containers as well
-- Keep the primary Taskrunner database and long-term audit store outside the worker containers
-- Treat containers as execution sandboxes, not as the system of record
-
-Rationale:
-- Stronger host isolation for file access, shell commands, and web access
-- Cleaner policy boundaries for autonomous runs
-- Better reproducibility across workstations
-- Safer support for higher-autonomy worker modes
-
-Current bias:
-- Per-task worker containers
-- Non-root containers
-- Narrow workspace mounts, preferably task-specific worktrees
-- Restricted or allowlisted network access
-- No broad host secret mounts
-- Container teardown after task completion, while keeping logs/artifacts outside the container or on tightly scoped volumes
-
-## Open Questions For Interview
-
-These are the main design questions that still need direct answers before the implementation plan is stable.
-
-### A. Client capture model
-- How should Taskrunner capture every prompt and response for normal foreground
-  client use?
-  - Launch wrappers such as `taskrunner codex`, `taskrunner claude`, and
-    `taskrunner gemini`
-  - Client hooks/plugins where available
-  - MCP prompt/response boundary calls where clients support them
-  - Native log/session import
-  - Terminal/session capture
-  - Hybrid by client
-- Which capture path should be implemented first?
-
-### B. Codex backend choice
-- Status: decided
-- Codex integration starts with `codex exec` / `codex exec resume`.
-- How much instability from experimental Codex control surfaces is acceptable in
-  the initial release?
-
-### C. Claude backend choice
-- Should Claude integration start with:
-  - `claude -p` / `--resume`
-  - Claude Agent SDK
-  - CLI first with an upgrade path to the SDK
-- Do you want Taskrunner to broker Claude approval requests centrally from day one?
-
-### E. Network model
-- Should package installation be:
-  - Disabled by default
-  - Allowlisted by domain
-  - User-approvable per task
-
-### F. State placement
-- What data must stay outside containers:
-  - SQLite database
-  - Audit log
-  - Session graph
-  - Artifact store
-  - Extracted memory
-- What data may live inside containers temporarily:
-  - Worker-native session files
-  - Temp outputs
-  - Tool caches
-- Should worker-native session state be copied out after every turn for durability?
-
-### G. Artifact and result contract
-- What should every delegated turn return?
-  - Final answer
-  - Sources
-  - Changed files
-  - Patch/diff
-  - Shell log
-  - Structured status
-- Should Taskrunner normalize worker output into one shared schema even if native workers differ?
-
-### H. Security boundaries
-- Should Taskrunner itself ever run with direct shell/file powers, or only worker containers?
-- Should sensitive host paths be blocked centrally even if a worker would otherwise allow them?
-- Should worker containers receive long-lived credentials, short-lived credentials, or no credentials by default?
-
-### I. Session UX
-- How should durable Taskrunner sessions relate to normal client sessions,
-  delegated tasks, and worker-native sessions?
-- Should users and agents see delegated work as:
-  - A single abstract Taskrunner task
-  - Separate worker-native sessions linked from a Taskrunner task
-  - Both
-- Should agents be able to fork delegated tasks and compare branches of work?
-
-### J. Scope control for initial release
-- Is the initial release primarily:
-  - Cross-agent coding delegation
-  - Cross-agent coding delegation plus optional provider tasks
-  - A more general local worker orchestration platform
-- Which matters more for the first implementation:
-  - Security and isolation
-  - Rich multi-turn interaction
-  - Minimal implementation complexity
-
-### K. Installation and integration setup
-- During workstation setup, which integrations should be enabled by default?
-- Should setup auto-detect Codex, Claude, and Gemini CLIs, ask the user to enable
-  each one, or start with Taskrunner core only?
-- How should users add or remove integrations later?
-- Which of those setup flows are in scope for the first implementation?
-
-## Current Summary
-- Local personal MCP server
-- Always-on sessions for participating clients
-- Always-on prompt/response audit for everything Taskrunner can observe
-- Explicit delegation: normal client behavior stays native unless Taskrunner is
-  invoked
-- Controlled automatic memory extraction from the audit stream
-- MCP toolbox plus orchestration
-- Local worker delegation to configured coding agents is a first-class design goal
-- Optional provider workers may be supported, but they are no longer the primary product surface
-- Product/project name is Taskrunner
-- Preferred topology is Claude Code, Codex, Gemini, and later clients using
-  Taskrunner as a shared session/audit/memory/delegation layer through MCP,
-  wrappers, hooks, plugins, or log import as available
-- Multi-turn delegated tasks are required
-- Delegated coding workers run in Docker containers by default
-- Fetch-oriented provider tasks run in separate containers
-- Each delegated coding session gets its own git worktree
-- Each delegated coding session reuses the same worktree and container across turns
-- Coding-session containers have network disabled by default
-- Optional provider output is handed to coding workers as summary plus selected cited artifacts
-- Approval escalation is agent-first with human approval for higher-risk expansion
-- Risk tiers use predefined defaults with TOML-based overrides
-- Project rules persist and are auto-applied for that project
-- Global policy provides ceilings, with some settings allowed to be project-expandable
-- Each project gets a hidden local control directory named `.taskrunner/`
-- Durable state uses a hybrid global-plus-project-local model
-- Project-local state is split between portable core files and machine-local runtime state
-- Full operational audit with time, capacity, and tiered retention
-- Searchable memory with extracted facts, decisions, and tasks
-- Project-directory-first retrieval with optional global lookup
-- Project-scoped task records for cross-agent continuity
-- Hybrid context minimization and hybrid session recording
-- Mixed retrieval command model with first-class task lookup
-- TypeScript/Node.js runtime
-- SQLite primary database
-- Single local process
-- Codex worker harness uses `codex exec` / `codex exec resume` for the initial release
-- Integrations are optional configured capabilities. Workstation setup should not
-  require Codex, Claude, and Gemini to all be present or enabled.
-- Delegated workers and web research execution are currently biased toward Docker-based isolation
-- Database and durable audit/state should remain outside worker containers
-- Vector search strategy deferred for deeper planning
-- Security settings: global plus project overrides, config-file-first, TOML
-- Secrets via environment variables, including optional local `.env`
-- Retrieved web/artifact content treated as untrusted informational content
-- Consequential actions require approval even when memory or retrieved content suggests them
+
+- Product/project name: Taskrunner.
+- Project-local directory: `.taskrunner/`.
+- Delegated work unit: task.
+- Per-task interaction: turn.
+- Durable client interaction record: session.
+- Execution runtime: worker.
+- Worker integration code: worker harness.
+- Stored output: artifact.
+- Optional setup unit: integration.
+- Enabled support unit: configured capability.
+- Shared prompt/skill unit: instruction.
+- Core MCP tool names: `assign-task`, `continue-task`, `lookup-task`.
+
+## Build-Spec Decisions
+
+These decisions close the main planning gaps and define the default shape to
+build against first. They can evolve later, but implementation should treat
+them as the current baseline rather than reopen them opportunistically.
+
+### 1. Project-local file layout
+
+Portable shared paths under `.taskrunner/`:
+
+- `project.toml`: project identity and shared defaults.
+- `instructions/`: instruction packages, each with `instruction.toml` and
+  `body.md`.
+- `policy/`: shared project policy overlays and allowlists.
+- `imports/`: optional checked-in imported reference material intended to move
+  with the project.
+- `sessions/`: git-backed portable project session history in a compact,
+  append-friendly format.
+- `.gitignore`: ignores machine-local runtime state.
+
+Machine-local paths under `.taskrunner/local/`:
+
+- `config.toml`: workstation-local overrides such as enabled capabilities.
+- `cache/`: derived lookup caches and temporary import products.
+- `logs/`: local operational logs not intended for sync.
+- `locks/`: process and task locks.
+- `runtime/`: sockets, PID files, and other ephemeral process state.
+- `worker-sessions/`: copied worker-native continuation state when it is stored
+  project-locally instead of in the global state root.
+- `stash/`: stashed local history fragments kept during drift recovery.
+
+Git posture:
+
+- Commit portable files in `.taskrunner/` except machine-local runtime state.
+- Ignore `.taskrunner/local/` wholesale by default.
+- Treat `.taskrunner/sessions/` as portable project history that normally moves
+  with project pushes and pulls.
+- Do not place git worktrees inside `.taskrunner/`; Taskrunner may reference
+  them from local runtime state, but worktree directories themselves should live
+  in a Taskrunner-managed local runtime root outside the project tree.
+
+Portability rule:
+
+- Files under `.taskrunner/` outside `local/` are the portable project contract.
+- Files under `.taskrunner/local/` are per-machine and disposable.
+- Session continuity is part of portable project state. If a project moves to a
+  VM or another workstation, its compact session history should move with it.
+- Portable session history should include compact session/task/turn records and
+  related summaries or references, not every large log or raw worker event by
+  default.
+
+Sync and recovery rule:
+
+- Session portability uses explicit git push/pull rather than background sync.
+- Taskrunner should assume one active writer per session at a time.
+- If portable session history is stale or divergent, Taskrunner should detect
+  drift and prefer stash-and-rebuild recovery over clever merging.
+- Delete-and-rebuild is an allowed fast-path recovery option for disposable
+  local derived state.
+
+### 2. Database schema
+
+Initial durable tables:
+
+- `projects`: canonical project records keyed by normalized project root.
+- `project_aliases`: additional observed paths that resolve to the same project.
+- `sessions`: durable participating-client sessions.
+- `tasks`: delegated work records, optionally linked to an originating session.
+- `turns`: per-task delegated interactions.
+- `worker_sessions`: worker-native session identifiers and copied continuation
+  state metadata.
+- `audit_events`: append-only observable events across sessions and tasks.
+- `artifacts`: stored blobs or file references with hashes, sizes, and media
+  types.
+- `artifact_links`: joins between artifacts and sessions, tasks, turns, or
+  audit events.
+- `memory_records`: extracted decisions, facts, follow-ups, and summaries.
+- `instruction_packages`: logical filesystem instruction identities.
+- `instruction_snapshots`: point-in-time bodies and metadata used by sessions,
+  tasks, or turns.
+- `approval_records`: user, agent, or policy approvals and denials.
+- `policy_sets`: global and project policy documents plus effective hashes.
+- `capabilities`: enabled client and worker capabilities for a workstation.
+
+Core relationships:
+
+- A `project` has many `sessions`, `tasks`, `memory_records`, and project-level
+  `policy_sets`.
+- A `session` may create many `tasks` and many `audit_events`.
+- A `task` belongs to one `project`, may reference one originating `session`,
+  has many `turns`, and may have many `worker_sessions` over time.
+- A `turn` belongs to one `task`, may reference one active `worker_session`,
+  and has many `audit_events`, `artifacts`, `approval_records`, and
+  `instruction_snapshots`.
+- `audit_events` are the common event spine and may link to a `session`, `task`,
+  `turn`, `artifact`, `approval_record`, or `memory_record`.
+- `artifacts` are immutable once stored; relationships live in
+  `artifact_links`.
+- `instruction_snapshots` are immutable and referenced by the exact session,
+  task, or turn that used them.
+
+Implementation rules:
+
+- Use opaque stable IDs for every top-level record.
+- Keep foreign-key integrity on by default.
+- Treat `audit_events` and `turns` as append-oriented records; corrections
+  should be new events, not destructive edits.
+
+### 3. MCP tool schemas
+
+`assign-task` request:
+
+- `project`: absolute project path or known project handle.
+- `worker`: requested worker capability such as `codex`.
+- `prompt`: the delegated instruction text for the first turn.
+- `instructions`: optional instruction package refs or inline snapshots.
+- `context`: optional task/session/artifact refs to preload.
+- `policy`: optional requested expansions such as network or package install.
+- `metadata`: optional caller identity and correlation data.
+
+`assign-task` response:
+
+- `task_id`
+- `turn_id`
+- `status`
+- `worker`
+- `worker_session_id`
+- `summary`: compact final answer or current blocked state.
+- `changed_files`
+- `artifacts`
+- `error`
+
+`continue-task` request:
+
+- `task_id`
+- `prompt`
+- `instructions`
+- `context`
+- `policy`
+- `metadata`
+
+`continue-task` response:
+
+- Same shape as `assign-task`, with the current `task_id` and new `turn_id`.
+
+`lookup-task` request:
+
+- One of `task_id`, `session_id`, or a constrained project-scoped query.
+- Optional `include` fields such as `turns`, `artifacts`, `audit`,
+  `approvals`, `memory`, or `diff`.
+- Optional pagination controls for expanded results.
+
+`lookup-task` response:
+
+- Compact task or task-list summaries by default.
+- Expansion blocks only for requested `include` fields.
+- Artifact refs returned as handles, not inline large payloads.
+
+Artifact handle shape:
+
+- `artifact_id`
+- `kind`
+- `label`
+- `media_type`
+- `size_bytes`
+- `sha256`
+- `locator`
+
+Error codes:
+
+- `invalid_request`
+- `not_found`
+- `not_configured`
+- `approval_required`
+- `policy_denied`
+- `capture_unavailable`
+- `worker_unavailable`
+- `worker_failed`
+- `conflict`
+- `internal_error`
+
+### 4. Risk tiers and default policy
+
+Default risk tiers:
+
+- `read-only`: lookup, audit, memory, and other non-mutating operations.
+- `workspace-write`: isolated delegated edits inside the task worktree with no
+  network.
+- `networked`: delegated work that needs outbound network or package install.
+- `privileged`: host-level operations, broad mounts, or exceptional credential
+  exposure.
+
+Approval defaults:
+
+- `read-only` may run without extra approval when the caller is already inside a
+  participating session.
+- `workspace-write` requires explicit delegation but not an extra step beyond
+  the delegation action itself.
+- `networked` requires task-level approval.
+- `privileged` always requires human approval.
+
+Global hard limits:
+
+- No silent delegation of ordinary client work.
+- No broad host home, shell profile, or secret inheritance into workers.
+- No concurrent writers in the same task worktree.
+- Network and package installation start disabled.
+- Taskrunner host operations stay limited to orchestration, storage, policy,
+  git/worktree management, artifact/session-state copy-out, worker lifecycle,
+  and cleanup.
+
+Project-expandable settings:
+
+- Allowed workers and client integrations.
+- Default instruction packages.
+- Project-specific redaction additions.
+- Retention reductions or tighter storage caps.
+- Preapproved network domains or package registries, if global policy allows
+  that class of expansion.
+
+Default redaction coverage:
+
+- Authorization and bearer headers.
+- API keys and access tokens.
+- Cookie and session-token values.
+- SSH private keys.
+- Common `.env` secret values.
+- Worker auth material copied into logs or transcripts.
+
+### 5. Retention defaults and export format
+
+Default retention:
+
+- Core records are retained indefinitely by default:
+  projects, sessions, tasks, turns, approvals, policy sets, instruction
+  snapshots, memory records, and compact audit metadata.
+- Expirable large artifacts are retained for 90 days by default:
+  raw worker event streams, verbose logs, imported supporting material, and
+  large patch bundles.
+- Project-local machine caches under `.taskrunner/local/` are best-effort and
+  may be deleted at any time.
+
+Protected records:
+
+- Sessions, tasks, turns, approvals, instruction snapshots, memory records, and
+  the minimal audit/event records required to reconstruct history are protected
+  from automatic cleanup.
+
+Capacity policy:
+
+- Apply storage caps only to expirable artifact classes.
+- Evict oldest expirable artifacts first; never evict protected records to
+  satisfy a cap.
+
+Export formats:
+
+- Full SQLite export for lossless local backup.
+- JSONL export for sessions, tasks, turns, audit events, approvals, policies,
+  and memory records.
+- Artifact directory export with a manifest file.
+
+Artifact references in exports:
+
+- Structured records reference artifacts by `artifact_id`, content hash, and
+  relative export-manifest path.
+- Exports should remain readable even when large artifacts are omitted by
+  policy, with omission recorded explicitly in the manifest.
+
+### 6. Client-specific capture behavior
+
+Wrapper capture baseline for supported clients:
+
+- Launch command, arguments, timestamp, cwd, detected project root, and exit
+  status.
+- Raw terminal transcript when PTY capture is possible.
+- Explicit Taskrunner tool calls and delegation requests.
+- A durable Taskrunner session boundary even when structured prompt/response
+  parsing is unavailable.
+
+Current client expectations:
+
+- Codex:
+  wrapper capture is available now; delegated worker execution has strong
+  structured capture via `codex exec --json` and `codex exec resume --json`.
+- Claude Code:
+  wrapper capture is available now; delegated worker capture should use
+  `--output-format json` or `stream-json` once authenticated Docker retests are
+  stable.
+- Gemini:
+  wrapper capture is the baseline target; native capture and import behavior are
+  not yet assumed reliable.
+
+Native or import capture posture:
+
+- Use native hooks/plugins only where they provide cleaner, stable structured
+  prompt/response capture than wrappers.
+- Use log/session import only as recovery capture, not as the primary always-on
+  path.
+
+Visible warning for uncaptured work:
+
+- When Taskrunner can provide tools but cannot capture the active session,
+  surface: `Session not under Taskrunner capture; delegation and lookup remain
+  available, but prompt/response audit for this interaction will be incomplete.`
+
+### 7. Claude worker strategy
+
+Initial strategy:
+
+- Claude support should start CLI first, with an SDK upgrade path rather than an
+  SDK-first design.
+- Taskrunner should remain the central policy and approval broker; Claude-native
+  prompts for expanded permissions should be translated into Taskrunner approval
+  events where possible instead of becoming a separate policy system.
+
+Docker auth posture:
+
+- Use a narrow Claude auth volume mounted into the worker home.
+- Run as a non-root user.
+- Avoid host home mounts, Docker socket mounts, and privileged containers.
+- Treat login persistence as viable based on the Docker auth spike.
+
+Resume and event-stream posture:
+
+- Keep Claude as the additional worker candidate after Codex, not the worker
+  starting point.
+- Assume resume and file-edit/event-stream support are provisional until the
+  authenticated Docker retest confirms successful start, resume, and structured
+  event output during edits.
+- If Claude CLI proves stable, keep the harness contract aligned with Codex:
+  start turn, resume turn, capture worker-native session ID, stream events,
+  capture final response, and detect changed files.
+
+## Supporting Documents
+
+- `README.md`: short project overview.
+- `NAMING.md`: approved and candidate naming register.
+- `BACKEND_SPIKE.md`: Codex and Claude worker spike results.

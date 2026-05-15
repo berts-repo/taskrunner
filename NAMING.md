@@ -42,8 +42,8 @@ be reviewed before implementation.
 - Instruction package Markdown content file: `body.md`
 - Code that reads, validates, and snapshots instruction packages: instruction loader
 - Point-in-time database copy used for audit/history: instruction snapshot
-- Future database-backed instruction management layer: instruction registry
-- Initial MCP tool names:
+- Database-backed instruction management layer: instruction registry
+- Core MCP tool names:
   - `assign-task`
   - `continue-task`
   - `lookup-task`
@@ -115,7 +115,7 @@ be reviewed before implementation.
   user-facing tool lists.
 - `task` is the durable user-facing delegated work object.
 - `session` is the durable record for normal participating client interaction.
-- `job` remains available later for internal queue/execution semantics if needed.
+- `job` remains available for internal queue/execution semantics if needed.
 - `integration` describes optional setup for clients or workers such as Codex,
   Claude, and Gemini. `configured capability` describes the same idea from a
   policy/runtime perspective.
