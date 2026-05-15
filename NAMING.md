@@ -34,6 +34,15 @@ be reviewed before implementation.
 - Stored output: artifact
 - Optional client or worker setup unit: integration
 - Enabled client or worker support: configured capability
+- Reusable provider-neutral prompt or skill unit: instruction
+- Direct reusable prompt text: prompt
+- Reusable behavior or workflow guidance: skill
+- Folder containing instruction metadata and Markdown content: instruction package
+- Instruction package metadata file: `instruction.toml`
+- Instruction package Markdown content file: `body.md`
+- Code that reads, validates, and snapshots instruction packages: instruction loader
+- Point-in-time database copy used for audit/history: instruction snapshot
+- Future database-backed instruction management layer: instruction registry
 - Initial MCP tool names:
   - `assign-task`
   - `continue-task`
@@ -71,6 +80,12 @@ be reviewed before implementation.
 - connector
 - plugin
 - provider
+
+### Shared Prompt and Skill Unit
+
+- prompt package
+- skill package
+- instruction catalog
 
 ### Project-Local Directory
 

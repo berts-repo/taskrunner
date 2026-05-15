@@ -25,6 +25,9 @@ to use when implementation starts.
 - Execution runtime: worker
 - Worker integration code: worker harness
 - Stored output: artifact
+- Shared prompt/skill unit: instruction
+- Instruction authoring format: project-local instruction package files
+- Instruction audit format: SQLite instruction snapshots linked from sessions, tasks, and turns
 - Coding workspace model: task-specific git worktree
 - Multi-turn model: reuse the same task worktree across turns
 - Durable state model: hybrid global database plus project-local state
@@ -92,6 +95,31 @@ to use when implementation starts.
   - Prefer compact lookup results by default.
   - Expand memory or audit details only when the user, agent, or workflow asks
     for them.
+
+### Shared Instructions
+
+- Status: decided
+- Decision: Shared prompts and skills should be implemented as provider-neutral
+  instruction packages, authored in project files and snapshotted into SQLite
+  when loaded or used.
+- Implementation guidance:
+  - The project-local authoring format should live under `.taskrunner/` as
+    instruction package folders.
+  - Each instruction package should contain `instruction.toml` metadata and a
+    `body.md` Markdown body.
+  - The Markdown body is the provider-neutral instruction text.
+  - The TOML metadata should describe the instruction kind, name, version,
+    description, and any future compatibility fields.
+  - Taskrunner should keep the filesystem package as the source of truth for
+    authoring, review, git history, and project sharing.
+  - SQLite should store normalized snapshots of loaded or used instructions,
+    including metadata, body text, source path, content hash, and timestamps.
+  - Sessions, tasks, turns, artifacts, and audit records should link to the
+    instruction snapshot used at the time, not only to the current file path.
+  - Provider or worker integrations should compile the same instruction snapshot
+    into their native prompt/message/tool format.
+  - Do not make users edit instruction text directly in SQLite in the first
+    implementation.
 
 ### Optional Integrations
 

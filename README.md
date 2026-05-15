@@ -90,6 +90,30 @@ the audit stream: facts, decisions, and follow-up tasks attached to
 project-scoped sessions and records. Retrieval should stay compact and controlled
 so memory does not constantly bloat active client context.
 
+### Shared Instructions
+
+Taskrunner should support provider-neutral shared prompts and skills through
+instruction packages.
+
+The initial model is:
+
+- Author instructions as project-local files under `.taskrunner/`.
+- Store each instruction package as `instruction.toml` metadata plus a `body.md`
+  Markdown body.
+- Treat the filesystem package as the source of truth for editing, git history,
+  review, and project sharing.
+- Snapshot loaded or used instructions into SQLite with metadata, body text,
+  source path, content hash, and timestamps.
+- Link sessions, tasks, turns, artifacts, and audit records to the exact
+  instruction snapshot used at the time.
+- Let provider and worker integrations compile the same snapshot into their
+  native prompt or message format.
+
+A later release should add an instruction registry with database-backed editing
+and browsing. The first implementation should still store instruction snapshots
+in SQLite so that later registry work builds on the same audit trail instead of
+replacing it.
+
 ### Task Records
 
 The server will maintain project-scoped task records so different agents can reference prior work for the same project directory.

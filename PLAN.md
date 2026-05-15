@@ -93,6 +93,8 @@ expensive to retrofit later.
 - Multiple specialized lookup tools.
 - Second coding-agent worker.
 - Structured artifact/result contract shared across workers.
+- Instruction registry with database-backed editing and browsing, building on
+  the initial filesystem package plus SQLite instruction snapshot model.
 - Full Docker worker default if the initial runnable loop starts locally.
 - Research containers.
 - Broad provider abstraction.
@@ -117,11 +119,12 @@ expensive to retrofit later.
 ### Later Expansion Priority
 1. Full Docker worker default, if not completed in the initial release
 2. Structured artifact contract shared across workers
-3. Second coding-agent worker
-4. Richer project memory and retrieval
-5. Expanded lookup tools
-6. Tiered retention/redaction policy
-7. Optional research provider
+3. Instruction registry with database-backed editing and browsing
+4. Second coding-agent worker
+5. Richer project memory and retrieval
+6. Expanded lookup tools
+7. Tiered retention/redaction policy
+8. Optional research provider
 
 ## Backend Spike
 
