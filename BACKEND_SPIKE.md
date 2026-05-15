@@ -1,6 +1,6 @@
 # Backend Spike
 
-Compare Claude Code and Codex before choosing the first v1 worker backend.
+Compare Claude Code and Codex before choosing the first worker backend.
 
 ## Goal
 
@@ -23,7 +23,7 @@ For each backend, test:
 - Detect changed files.
 - Capture errors and exit status.
 - Observe approval behavior.
-- Check whether the interface is stable enough for v1.
+- Check whether the interface is stable enough for the initial release.
 
 ## Suggested Test Task
 
@@ -101,7 +101,7 @@ Observed Claude error session ID:
 One attempted Claude file-edit run with `--output-format stream-json` produced no
 output for several minutes and had to be terminated. That may be related to auth,
 permission mode, or startup behavior; retest after login before choosing Claude as
-the v1 backend.
+the first backend.
 
 ### Claude Docker Auth Result
 
@@ -135,10 +135,10 @@ availability, not container authentication.
 
 ### Recommendation
 
-- Recommended v1 worker: Codex if implementation starts before Claude usage
+- Recommended first worker: Codex if implementation starts before Claude usage
   resets.
 - Claude Code is viable in the intended Docker model after container auth setup.
-- Recommended v2 worker: Claude Code, or v1 alternative if usage is available
+- Recommended next worker: Claude Code, or first-worker alternative if usage is available
   and file-edit/resume tests pass in Docker.
 - Worker harness interface should be shaped around:
   - start turn
@@ -173,8 +173,8 @@ After Claude usage resets, rerun inside the authenticated Docker worker:
 
 The spike should ultimately produce:
 
-- Recommended v1 worker
-- Recommended v2 worker
+- Recommended first worker
+- Recommended next worker
 - Minimum worker harness interface
 - Minimum task record fields
 - Known risks

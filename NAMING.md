@@ -18,6 +18,7 @@ be reviewed before implementation.
 - Database concepts that appear in docs, logs, or exported records
 - Session/task/run/job/thread terminology
 - Worker/backend/provider/agent terminology
+- Client/integration/configured capability terminology
 - Artifact/rule/memory terminology
 - Risk tier names
 
@@ -27,9 +28,12 @@ be reviewed before implementation.
 - Project-local directory: `.taskrunner/`
 - Delegated work unit: task
 - Per-task interaction: turn
+- Durable client interaction record: session
 - Execution runtime: worker
 - Worker integration code: worker harness
 - Stored output: artifact
+- Optional client or worker setup unit: integration
+- Enabled client or worker support: configured capability
 - Initial MCP tool names:
   - `assign-task`
   - `continue-task`
@@ -49,7 +53,6 @@ be reviewed before implementation.
 - run
 - job
 - thread
-- session
 
 ### Execution Backend
 
@@ -62,6 +65,12 @@ be reviewed before implementation.
 - adapter
 - bridge
 - harness
+
+### Optional Setup Unit
+
+- connector
+- plugin
+- provider
 
 ### Project-Local Directory
 
@@ -90,4 +99,8 @@ be reviewed before implementation.
 - Tool names use hyphens because MCP permits hyphens and they read better in
   user-facing tool lists.
 - `task` is the durable user-facing delegated work object.
+- `session` is the durable record for normal participating client interaction.
 - `job` remains available later for internal queue/execution semantics if needed.
+- `integration` describes optional setup for clients or workers such as Codex,
+  Claude, and Gemini. `configured capability` describes the same idea from a
+  policy/runtime perspective.

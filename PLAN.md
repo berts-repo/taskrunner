@@ -1,14 +1,17 @@
 # Taskrunner MCP Server Plan
 
 ## Goal
-Design an MCP server that can run inside Claude Code, Codex, and later other MCP-compatible clients, with:
-- Delegated local worker execution via installed coding agents such as Claude Code and Codex
-- Basic auditing and artifact capture
-- Project-scoped session continuity
+Design an MCP server that can run inside Claude Code, Codex, Gemini, and later other MCP-compatible clients, with:
+- Delegated local worker execution via configured coding agents such as Claude Code and Codex
+- Always-on prompt/response audit for participating clients
+- Durable project-scoped sessions
+- Artifact capture and lightweight automatic memory
 
-The v1 scope is intentionally narrower than the full long-term platform: prove
-local coding-agent delegation first, then add richer orchestration, isolation,
-memory, and policy features in v2.
+The initial scope should be one coherent release, not a stack of separate
+versions. It should prove durable sessions, full audit capture for observable
+client activity, and local coding-agent delegation while also including the
+foundational isolation, state, memory, and project-record design that would be
+expensive to retrofit later.
 
 ## Interview Status
 - Mode: requirements interview
@@ -16,66 +19,90 @@ memory, and policy features in v2.
 
 ## Agreed Scope Direction
 
-### V1 alpha product shape
-- Build a local MCP delegation broker for coding agents.
+### Initial Release Product Shape
+- Build a local session, audit, memory, and delegation layer for coding and
+  research clients.
 - Use Codex as the first worker, based on the current backend spike.
 - Use TypeScript/Node.js and SQLite.
 - Keep project directory as a first-class scope key.
+- Maintain durable sessions for participating clients.
+- Audit every prompt and response Taskrunner can observe.
 - Support project-scoped delegated task records and continuation.
-- Store basic audit records and artifacts for delegated work.
+- Store audit records and artifacts for normal sessions and delegated work.
+- Use task-specific git worktrees as the primary code-state/version boundary.
+- Keep worker runtime state, durable Taskrunner state, and project-local state
+  clearly separated.
+- Add the `.taskrunner/` project control directory with a small shared config and
+  local-only runtime area.
+- Start with simple configurable retention and redaction instead of a full policy
+  engine.
 - Keep the initial MCP tool surface small.
-- Use a hybrid runtime approach: design the worker runtime interface for future
-  Docker/worktree isolation, but implement the first v1 alpha loop with the
-  simplest local Codex execution path.
+- Keep delegation explicit: normal client behavior stays native unless the user
+  or active client invokes Taskrunner delegation, lookup, memory, or audit
+  workflows.
+- Treat clients and workers as optional configured capabilities. Workstation
+  setup should not require Codex, Claude, and Gemini to all be installed,
+  authenticated, or enabled.
+- Use the simplest worker execution path that still fits the worktree and
+  durable-state model. Docker containers remain the preferred isolation target,
+  but the first runnable loop may use local execution behind the same runtime
+  interface if container support would block progress.
 
-### V1 alpha includes
+### Initial Release Includes
 - MCP server.
+- Durable session records for participating clients.
+- Always-on audit records for observed prompts and responses.
 - One local coding-agent worker: Codex.
 - SQLite session/audit store.
 - Project-scoped task continuation.
+- Task-specific git worktree per delegated coding task.
+- Reused worker session state across turns for the same delegated task.
+- Project-local `.taskrunner/` directory:
+  - shared project config
+  - local runtime/state files
+- Basic policy config:
+  - global defaults
+  - project overrides
+  - approval gates for higher-risk capability expansion
+- Basic retention/redaction config:
+  - max age
+  - max storage
+  - protected core records
 - Initial MCP tools:
   - `assign-task`
   - `continue-task`
   - `lookup-task`
 - Basic artifacts:
+  - prompts and responses
   - final summary
   - status
   - worker-native session ID
   - changed files
   - logs
   - patch/diff where available
+- Lightweight memory records:
+  - extracted decisions
+  - extracted facts
+  - extracted follow-up tasks
 
-### Deferred from v1
+### Later Expansion
+- Broader client capture paths, such as wrappers, hooks, plugins, or log import
+  for additional CLIs.
 - Optional research/provider workers.
-- Broad provider abstraction.
 - Semantic/vector memory.
 - Multiple specialized lookup tools.
-- Complex retention tiers.
-- Research containers.
-- Full Docker/worktree isolation, though the v1 alpha interfaces should leave a
-  clean path to add it next.
-
-### V2 candidate additions
 - Second coding-agent worker.
 - Structured artifact/result contract shared across workers.
-- Docker/worktree isolation:
-  - per-session git worktree
-  - worker container
-  - reused worktree/container across turns
-  - network disabled by default
-  - explicit escalation for package install or network access
-- Structured project memory:
-  - decisions
-  - facts
-  - open tasks
-  - prior session summaries
+- Full Docker worker default if the initial runnable loop starts locally.
+- Research containers.
+- Broad provider abstraction.
+- Richer project memory:
+  - semantic retrieval
+  - prior session summary ranking
+  - memory review/edit workflows
 - Retention and redaction policies:
-  - max days
-  - max storage
   - tiered retention by record type
   - global hard limits
-  - project overrides
-- Project-local control directory.
 - Expanded lookup tools:
   - task lookup expansion
   - `memory.lookup`
@@ -85,24 +112,24 @@ memory, and policy features in v2.
   - fetch/research task
   - summary with cited excerpts
   - artifact handoff to coding worker
+- Polished setup/add/remove flows for optional client and worker integrations.
 
-### V2 priority order
-1. Second worker
-2. Structured artifact contract
-3. Docker/worktree isolation
-4. Project memory
-5. Retention/redaction policy
-6. Project control directory
-7. Expanded lookup tools
-8. Optional research provider
+### Later Expansion Priority
+1. Full Docker worker default, if not completed in the initial release
+2. Structured artifact contract shared across workers
+3. Second coding-agent worker
+4. Richer project memory and retrieval
+5. Expanded lookup tools
+6. Tiered retention/redaction policy
+7. Optional research provider
 
 ## Backend Spike
 
-Decision: run a short spike comparing Claude Code and Codex before choosing the v1
+Decision: run a short spike comparing Claude Code and Codex before choosing the first
 worker.
 
 Initial result: Codex passed the start/resume spike and is the current
-recommendation for the v1 worker if implementation starts immediately. Claude
+recommendation for the first worker if implementation starts immediately. Claude
 Code has the right CLI surface. Host login is not visible inside the Codex
 sandbox, but login-based Claude auth was proven viable inside a non-root Docker
 worker with a persistent `/home/worker` volume. Claude's remaining file-edit and
@@ -116,11 +143,11 @@ The spike should test each backend for:
 - Detecting changed files.
 - Capturing errors and exit status.
 - Understanding approval behavior.
-- Understanding whether the interface is stable enough for v1.
+- Understanding whether the interface is stable enough for the initial release.
 
 The output of the spike should be a recommendation for:
-- Which worker should ship first in v1.
-- Which worker should be added second in v2.
+- Which worker should ship first.
+- Which worker should be added next.
 - What worker harness interface is actually needed.
 - What task/artifact fields are required for the first schema.
 
@@ -164,13 +191,13 @@ Current approved naming decisions:
   - Manual tool for the user
   - Autonomous tool for agents
   - Both
-- Recommendation: Both, unless you want to keep the first version narrow
+- Recommendation: Both, unless you want to keep the initial release narrow
 - Answer: Both
 
 ### 2. Deployment scope
 - Status: pending
 - Status: decided
-- Question: Should the first version be personal/local, or built as a multi-user service from the start?
+- Question: Should the initial release be personal/local, or built as a multi-user service from the start?
 - Options:
   - Local personal server
   - Single-user remote server
@@ -244,7 +271,7 @@ Current approved naming decisions:
 ### 11. Memory behavior
 - Status: pending
 - Status: decided
-- Question: What should "memory" mean in the first version from the user's perspective?
+- Question: What should "memory" mean in the initial release from the user's perspective?
 - Options:
   - Searchable history only
   - Searchable history plus extracted facts/decisions
@@ -394,7 +421,7 @@ Current approved naming decisions:
   - Per-project only
   - Both
 - Recommendation: Both
-- Answer: Both, with easy editable files and no UI required for the first version
+- Answer: Both, with easy editable files and no UI required for the initial release
 
 ### 25. Config format
 - Status: decided
@@ -422,10 +449,11 @@ Current approved naming decisions:
 - Question: How should Claude Code and Codex participate in the system?
 - Options:
   - Direct peer-to-peer delegation between coding agents
-  - Both agents call Taskrunner, which can delegate to installed workers
+  - Agents call Taskrunner, which can delegate to configured workers
   - Orchestrator-only internal workers
 - Recommendation: Use Taskrunner as the broker
-- Answer: Claude Code and Codex should both call Taskrunner, and Taskrunner should be able to delegate to installed workers
+- Answer: Claude Code, Codex, Gemini, and later clients should be able to call
+  Taskrunner, and Taskrunner should be able to delegate to configured workers
 
 ### 28. Delegation interaction model
 - Status: decided
@@ -586,15 +614,18 @@ Current approved naming decisions:
 - Recommendation: One main shared file plus optional local override file
 - Answer: Use one main shared project file plus an optional local override file, alongside local runtime/state directories
 
-### 44. V1 alpha runtime priority
+### 44. Initial release runtime priority
 - Status: decided
-- Question: Should v1 alpha prioritize minimal working delegation, Docker/worktree isolation from day one, or a hybrid?
+- Question: Should the initial release prioritize minimal working delegation, Docker/worktree isolation from day one, or a hybrid?
 - Options:
   - Minimal working delegation first
   - Docker/worktree isolation from day one
   - Hybrid interface-first approach
 - Recommendation: Hybrid interface-first approach
-- Answer: Hybrid. Build interfaces assuming isolation, but implement host-run Codex first behind a worker runtime boundary so Docker/worktree isolation can be added next without changing the MCP tool contract.
+- Answer: Hybrid. Use task-specific git worktrees and the durable-state model in
+  the initial release. Build the worker runtime boundary so Docker can become the
+  default isolation layer without changing the MCP tool contract. Host-run Codex
+  is acceptable only as the first runnable path if Docker blocks progress.
 
 ### 45. Product/project name
 - Status: decided
@@ -661,22 +692,40 @@ Current approved naming decisions:
 - Recommendation: `assign-task`, `continue-task`, `lookup-task`
 - Answer: `assign-task`, `continue-task`, `lookup-task`
 
+### 51. Codex worker control surface
+- Status: decided
+- Question: Should the initial Codex worker harness use `codex exec`, `codex app-server`, or `codex exec` with an upgrade path to `app-server`?
+- Options:
+  - `codex exec` / `codex exec resume`
+  - `codex app-server`
+  - `codex exec` first with an upgrade path to `app-server`
+- Recommendation: `codex exec` first with an upgrade path to `app-server`
+- Answer: `codex exec` / `codex exec resume`
+
 ## Direction Update: Local Worker Delegation
 
-The project direction has been narrowed around delegation and audit.
+The project direction has been narrowed around always-on sessions, always-on
+audit, explicit delegation, and controlled automatic memory.
 
-Taskrunner is now intended to act as a local broker that:
+Taskrunner is now intended to act as a local layer that:
+- Keeps durable sessions for participating clients
+- Audits every observed prompt and response
+- Extracts lightweight project memory from the audit stream
 - Exposes MCP tools to Claude Code, Codex, and later other MCP clients
 - Receives delegation requests from those clients
-- Launches installed coding-agent applications as local workers
+- Launches configured coding-agent applications as local workers
 - Preserves audit, policy, task continuity, and project-scoped records across those delegated runs
 
 Optional provider workers may still exist later, but they are no longer the primary product framing.
 
 Current preferred architecture:
 - Taskrunner runs as a separate local process
-- Claude Code and Codex can both call Taskrunner as MCP clients
-- Taskrunner can delegate work to installed workers such as `claude` and `codex`
+- Claude Code, Codex, Gemini, and later clients can participate through MCP,
+  wrappers, hooks, plugins, or log-import capture paths as available
+- Normal client behavior remains native unless Taskrunner delegation, lookup,
+  memory, or audit workflows are explicitly invoked
+- Taskrunner can delegate work to configured workers such as `claude`, `codex`,
+  or `gemini`
 - Multi-turn delegation is a first-class requirement
 - Taskrunner owns the canonical task/turn graph, while also storing worker-native
   session IDs for continuation.
@@ -707,12 +756,23 @@ Current bias:
 
 These are the main design questions that still need direct answers before the implementation plan is stable.
 
+### A. Client capture model
+- How should Taskrunner capture every prompt and response for normal foreground
+  client use?
+  - Launch wrappers such as `taskrunner codex`, `taskrunner claude`, and
+    `taskrunner gemini`
+  - Client hooks/plugins where available
+  - MCP prompt/response boundary calls where clients support them
+  - Native log/session import
+  - Terminal/session capture
+  - Hybrid by client
+- Which capture path should be implemented first?
+
 ### B. Codex backend choice
-- Should Codex integration start with:
-  - `codex exec` / `codex exec resume`
-  - `codex app-server`
-  - `codex exec` first with an upgrade path to `app-server`
-- How much instability from experimental Codex control surfaces is acceptable in v1?
+- Status: decided
+- Codex integration starts with `codex exec` / `codex exec resume`.
+- How much instability from experimental Codex control surfaces is acceptable in
+  the initial release?
 
 ### C. Claude backend choice
 - Should Claude integration start with:
@@ -756,14 +816,16 @@ These are the main design questions that still need direct answers before the im
 - Should worker containers receive long-lived credentials, short-lived credentials, or no credentials by default?
 
 ### I. Session UX
+- How should durable Taskrunner sessions relate to normal client sessions,
+  delegated tasks, and worker-native sessions?
 - Should users and agents see delegated work as:
   - A single abstract Taskrunner task
   - Separate worker-native sessions linked from a Taskrunner task
   - Both
 - Should agents be able to fork delegated tasks and compare branches of work?
 
-### J. Scope control for v1
-- Is v1 primarily:
+### J. Scope control for initial release
+- Is the initial release primarily:
   - Cross-agent coding delegation
   - Cross-agent coding delegation plus optional provider tasks
   - A more general local worker orchestration platform
@@ -772,13 +834,27 @@ These are the main design questions that still need direct answers before the im
   - Rich multi-turn interaction
   - Minimal implementation complexity
 
+### K. Installation and integration setup
+- During workstation setup, which integrations should be enabled by default?
+- Should setup auto-detect Codex, Claude, and Gemini CLIs, ask the user to enable
+  each one, or start with Taskrunner core only?
+- How should users add or remove integrations later?
+- Which of those setup flows are in scope for the first implementation?
+
 ## Current Summary
 - Local personal MCP server
+- Always-on sessions for participating clients
+- Always-on prompt/response audit for everything Taskrunner can observe
+- Explicit delegation: normal client behavior stays native unless Taskrunner is
+  invoked
+- Controlled automatic memory extraction from the audit stream
 - MCP toolbox plus orchestration
-- Local worker delegation to installed coding agents is now a first-class design goal
+- Local worker delegation to configured coding agents is a first-class design goal
 - Optional provider workers may be supported, but they are no longer the primary product surface
 - Product/project name is Taskrunner
-- Preferred topology is Claude Code and Codex as MCP clients, with Taskrunner brokering delegated worker runs
+- Preferred topology is Claude Code, Codex, Gemini, and later clients using
+  Taskrunner as a shared session/audit/memory/delegation layer through MCP,
+  wrappers, hooks, plugins, or log import as available
 - Multi-turn delegated tasks are required
 - Delegated coding workers run in Docker containers by default
 - Fetch-oriented provider tasks run in separate containers
@@ -802,6 +878,9 @@ These are the main design questions that still need direct answers before the im
 - TypeScript/Node.js runtime
 - SQLite primary database
 - Single local process
+- Codex worker harness uses `codex exec` / `codex exec resume` for the initial release
+- Integrations are optional configured capabilities. Workstation setup should not
+  require Codex, Claude, and Gemini to all be present or enabled.
 - Delegated workers and web research execution are currently biased toward Docker-based isolation
 - Database and durable audit/state should remain outside worker containers
 - Vector search strategy deferred for deeper planning

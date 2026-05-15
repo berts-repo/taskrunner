@@ -1,58 +1,83 @@
 # Taskrunner MCP Server
 
-Local-first MCP server for Claude Code, Codex, and later other MCP-compatible clients.
+Local-first session, audit, memory, and delegation layer for Claude Code, Codex,
+Gemini, and later MCP-compatible clients.
 
-The first version is intentionally narrow: prove local coding-agent delegation, task
-continuity, basic audit, and artifact capture before expanding into a broader
-orchestration platform.
+The initial release is intentionally focused, but it should include the
+foundational pieces that would be expensive to retrofit later: local coding-agent
+delegation, durable sessions, git worktree isolation, full prompt/response audit,
+artifact capture, and project-scoped state.
 
 It is designed to act as both:
 - An MCP toolbox that exposes useful tools to agents and users
-- A local delegation and audit broker for installed workers
+- A local session and audit layer for participating clients
+- A local delegation broker for configured workers
 
 ## Goals
 
-- Delegate work to one installed coding-agent worker first
+- Keep durable sessions for participating clients
+- Audit every prompt and response Taskrunner can observe
+- Delegate work to one configured coding-agent worker first
 - Keep active client context small through project-scoped task records
-- Maintain a basic audit trail for delegated work
+- Maintain a complete audit trail for sessions, delegation, and worker activity
 - Store and retrieve core artifacts safely
-- Leave room for stronger security boundaries and multi-agent support in v2
+- Keep the first implementation small while avoiding throwaway architecture
 
 ## Core Features
 
+### Sessions and Audit
+
+Taskrunner should keep sessions working across normal client use and explicit
+delegation workflows.
+
+The target audit model is always-on for participating clients:
+
+- Every observed user prompt
+- Every observed client or worker response
+- Delegation requests
+- Tool calls and worker events where available
+- Artifacts, approvals, errors, and file changes
+- Project, session, task, and worker links
+
+Delegation is explicit, but audit is automatic. Normal client behavior should
+stay native unless the user invokes Taskrunner delegation, lookup, memory, or
+audit workflows.
+
 ### Delegation
 
-The system is designed to let MCP clients such as Claude Code and Codex:
+The system is designed to let clients such as Claude Code, Codex, and Gemini:
 
 - Call Taskrunner as a shared control plane
-- Delegate work to installed workers
+- Delegate work to configured workers
 - Continue multi-turn delegated tasks
 - Exchange artifacts, summaries, and structured results
 
-The current v1 direction is to support one local worker first, chosen from:
+The initial release should support one local worker first, currently Codex based
+on the backend spike. Workstation setup should not assume every possible worker
+is installed or authenticated. Codex, Claude, Gemini, and later workers should be
+configured capabilities that can be enabled, skipped, or added later.
 
-- Claude Code
-- Codex
-
-The second coding-agent backend is planned for v2.
+Additional coding-agent or research backends can be added after the first worker
+path is stable.
 
 ### Isolation
 
-Delegated execution is intended to move toward stronger isolation. The planned v2
-model is:
+Delegated execution should use the same isolation model from the initial release
+where practical:
 
 - Coding workers run in Docker containers
 - Each delegated coding task gets its own git worktree
 - The same worktree and container are reused across turns within a task
 - Coding-session containers have network disabled by default
-- Research or fetch-oriented tasks are deferred until after the core coding
+- Research or fetch-oriented tasks can be added later after the core coding
   delegation loop is working
 
 ### Memory
 
-Rich memory is deferred until v2. The v1 server will maintain project-scoped
-task records that include:
+The initial release will maintain project-scoped sessions and task records that
+include:
 
+- Session summary
 - Delegated task summary
 - Worker and worker-native session ID
 - Status
@@ -60,7 +85,10 @@ task records that include:
 - Logs and artifacts
 - Timestamps
 
-V2 may add structured project memory for decisions, facts, and open tasks.
+Structured project memory should start as lightweight automatic extraction from
+the audit stream: facts, decisions, and follow-up tasks attached to
+project-scoped sessions and records. Retrieval should stay compact and controlled
+so memory does not constantly bloat active client context.
 
 ### Task Records
 
@@ -79,8 +107,8 @@ Initial tool surface:
 - `continue-task`
 - `lookup-task`
 
-V2 may add separate `memory.lookup`, `rules.lookup`, and `tasks.lookup` tools once
-those concepts exist as real stored data.
+Separate `memory.lookup`, `rules.lookup`, and `tasks.lookup` tools can wait until
+those concepts need independent user-facing workflows.
 
 ### Context Control
 
@@ -91,23 +119,14 @@ The system is intended to reduce context-window pressure in MCP clients by:
 - Using project-aware retrieval instead of loading broad history
 - Exploring reference-rule files and retrieval-on-demand
 
-### Audit
+### Retention
 
-The v1 server will keep a basic operational audit trail, including:
-
-- Delegation requests
-- Tool calls
-- Prompts
-- Responses
-- Artifacts
-- Approvals
-- Project and task links
-
-V2 should expand this into a full audit and retention policy:
+Retention should start simple and configurable:
 
 - Keep records for X days
 - Enforce a maximum storage capacity
-- Apply tiered retention by record type
+- Protect core session/task/audit records while allowing large artifacts and logs
+  to expire sooner
 
 ### Artifacts
 
@@ -145,6 +164,19 @@ Planned security properties:
 - Retrieved or imported content treated as untrusted informational content
 - Consequential actions require approval
 
+### Installation and Integrations
+
+Workstation setup should support Taskrunner core without requiring every client
+or worker integration to be present.
+
+Initial setup should be able to:
+
+- Install Taskrunner core
+- Enable the first supported worker
+- Skip unavailable workers
+- Report clearly when a requested worker is not configured
+- Leave room to add Codex, Claude, Gemini, or other integrations later
+
 ## Runtime and Storage
 
 - Runtime: TypeScript / Node.js
@@ -153,8 +185,8 @@ Planned security properties:
 - Database export support: required
 - Durable state: hybrid global database plus project-local state
 
-Vector or semantic search support may still be useful later, but it is not part of
-the v1 product axis.
+Vector or semantic search support may still be useful later, but it is not part
+of the initial product axis.
 
 ## Project Status
 
