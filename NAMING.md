@@ -50,6 +50,11 @@ be reviewed before implementation.
 
 ## Candidate Terms
 
+### Cancellation Tool
+
+- `cancel-task`
+- `stop-task`
+
 ### Product or Project
 
 - Local Agent Broker

@@ -18,7 +18,8 @@ It is designed to act as:
 - Keep active client context small through compact project-scoped records.
 - Maintain a complete audit trail for sessions, delegation, worker activity,
   approvals, errors, artifacts, and file changes.
-- Use task-specific git worktrees and worker isolation for delegated coding.
+- Use task-specific isolated git workspaces (worktrees on host, task-local
+  clones in Docker) and worker isolation for delegated coding.
 - Remain portable across workstations with optional client and worker
   integrations.
 
@@ -37,16 +38,19 @@ It is designed to act as:
 ## Architecture Summary
 
 - Runtime: TypeScript / Node.js.
-- Database: SQLite.
-- Execution model: single local Taskrunner process.
+- Storage: append-only JSONL event log as the write path, SQLite as the
+  derived, rebuildable index.
+- Execution model: single local Taskrunner daemon shared by all clients
+  through thin connection shims.
 - Durable state: hybrid global database plus project-local `.taskrunner/` state.
 - Client capture: portability-first hybrid model.
   - Wrapper commands are the baseline.
   - Native hooks/plugins are enhanced integrations where reliable.
   - Log/session import is a recovery path.
 - Delegation: explicit, multi-turn, project-scoped tasks.
-- Worker isolation: Docker containers by default, task-specific git worktrees,
-  network disabled unless approved.
+- Worker isolation: Docker containers by default, task-specific git workspaces
+  (worktrees on host, task-local clones in Docker), network disabled unless
+  approved.
 - Secrets: environment variables and explicitly configured worker credentials,
   without broad host secret inheritance.
 - Configuration: TOML, with global defaults and project overrides.
@@ -60,6 +64,7 @@ It is designed to act as:
 ## Status
 
 This repository is in planning and design cleanup. The core build-facing
-decisions now live in `PLAN.md`; the next step is implementing the
-`.taskrunner/` layout, SQLite schema, MCP tool contracts, and initial Codex
-worker loop.
+decisions now live in `PLAN.md`, including a phased build order. Phase 1 is a
+usable broker: the daemon, the three MCP tools with the async contract, a
+host-run Codex worker, the JSONL log plus SQLite index, and trace-capable
+lookup.

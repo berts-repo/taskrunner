@@ -15,8 +15,10 @@ portable workstation experience rather than disconnected scope slices.
 - Local personal MCP server with database export support.
 - MCP toolbox plus orchestration layer.
 - TypeScript/Node.js runtime.
-- SQLite primary database.
-- Single local Taskrunner process.
+- Append-only JSONL event log as the durable write path, with SQLite as the
+  derived, rebuildable index.
+- Single local Taskrunner daemon shared by all participating clients through
+  thin connection shims.
 - Project directory as a first-class scope key.
 - Durable sessions for participating clients.
 - Always-on audit for every prompt and response Taskrunner can observe.
@@ -24,7 +26,9 @@ portable workstation experience rather than disconnected scope slices.
 - Project-scoped task records and continuation.
 - Lightweight automatic memory extraction from the audit stream.
 - Artifact capture for normal sessions and delegated work.
-- Task-specific git worktrees as the code-state boundary for delegated coding.
+- Task-specific isolated git workspaces as the code-state boundary for
+  delegated coding: worktrees for host-run workers, task-local clones for
+  Docker workers.
 - Docker containers as the preferred worker isolation model.
 - Global defaults plus persistent project policy.
 - TOML configuration.
@@ -56,9 +60,13 @@ Taskrunner uses a portability-first hybrid capture model.
 Required baseline:
 
 - Wrapper commands such as `taskrunner codex`, `taskrunner claude`, and
-  `taskrunner gemini`.
-- A supported client should have a portable wrapper integration unless wrapper
-  capture is technically impossible and documented.
+  `taskrunner gemini`, acting as thin shims that record launch metadata and a
+  durable session boundary.
+- Full PTY transcript capture is out of the baseline: parsing raw terminal
+  output from TUI clients is high effort and low fidelity. It stays a possible
+  later enhancement only if a concrete need proves it out.
+- Structured prompt/response capture comes from native hooks and from delegated
+  work, where Taskrunner observes everything directly as the broker.
 
 Enhanced capture:
 
@@ -148,8 +156,18 @@ tests are completed.
 
 Delegated coding workers should run in isolated workspaces.
 
-- Each delegated coding task gets a task-specific git worktree.
-- The same worktree is reused across turns for the same task.
+- Each delegated coding task gets a task-specific isolated git workspace.
+- The workspace mechanism depends on the runtime boundary:
+  - Host-run workers use a task-specific git worktree.
+  - Docker workers use a task-local clone (`git clone --local` from the host
+    repository), because a worktree's `.git` file points back into the main
+    repository. Mounting only the worktree breaks git inside the container,
+    and mounting the main repository's `.git` writable would let a worker
+    plant hooks or config that execute on the host.
+- Docker task clones are fully self-contained and disposable. Completed work
+  lands by fetching the task branch from the clone on the host side, followed
+  by review; the worker never writes to the real repository.
+- The same workspace is reused across turns for the same task.
 - One worker owns a task at a time.
 - Turns within the same task run serially.
 - Different tasks may run concurrently when isolated.
@@ -163,13 +181,15 @@ Container posture:
 - Taskrunner database, audit log, artifact store, session graph, and extracted
   memory stay outside worker containers.
 - Containers should run as non-root where practical.
-- Workspace mounts should be narrow, preferably the task-specific worktree.
+- Workspace mounts should be narrow: only the task-local clone directory, and
+  never the main repository or its `.git`.
 - Broad host secret mounts are avoided.
 - Coding containers have network disabled by default.
 - Package installation and network access require task-level approval.
 
 Taskrunner itself may run narrow host operations needed for orchestration,
-storage, policy checks, git worktree setup, artifact/session-state copy-out,
+storage, policy checks, git workspace setup (worktrees and task clones),
+task-branch fetch from completed clones, artifact/session-state copy-out,
 worker lifecycle, and cleanup. Arbitrary delegated edits and broad shell commands
 belong in workers.
 
@@ -225,6 +245,13 @@ state so projects can move across workstations cleanly.
 ## Memory And Context Control
 
 Memory starts as lightweight automatic extraction from the audit stream.
+
+Memory records follow the instruction-package pattern: markdown files under
+`.taskrunner/memory/` are the human-readable, human-editable source of truth,
+and the database keeps snapshots and indexes over them. Editing the file is
+editing the memory. This keeps the knowledge layer legible and directly usable
+by external tools such as Obsidian, while the machine-generated audit trail
+stays in structured storage.
 
 Memory records include:
 
@@ -287,7 +314,25 @@ Specialized tools can be added when workflows need separate contracts:
 - audit lookup
 
 Tool responses should prefer compact summaries with handles to expandable
-details and artifacts.
+details and artifacts, rendered as compact readable text rather than raw JSON
+blobs when the consumer is a model.
+
+Delegation is asynchronous by default: `assign-task` and `continue-task`
+return immediately with the task handle and a running status, and results are
+retrieved through `lookup-task`. An optional wait flag can block for short
+tasks. Running turns can be canceled, and every turn has a timeout that
+produces a structured failure instead of a hang.
+
+History presentation rules:
+
+- History lookups present prompt/response pairs as ordered exchanges by
+  default, never loose audit rows the caller must correlate.
+- A trace view replays delegated work end-to-end: inputs (prompt, instruction
+  snapshot, injected context and memory), observable worker activity
+  (reasoning messages, commands, file reads and edits), and outputs (response,
+  diff, status).
+- Trace and history requests accept a scope argument: a single turn, the last
+  N exchanges, a whole session, or a whole task.
 
 Every delegated turn should return:
 
@@ -414,6 +459,8 @@ Portable shared paths under `.taskrunner/`:
 - `project.toml`: project identity and shared defaults.
 - `instructions/`: instruction packages, each with `instruction.toml` and
   `body.md`.
+- `memory/`: extracted memory records as markdown files, the editable source of
+  truth indexed and snapshotted by the database.
 - `policy/`: shared project policy overlays and allowlists.
 - `imports/`: optional checked-in imported reference material intended to move
   with the project.
@@ -438,9 +485,10 @@ Git posture:
 - Ignore `.taskrunner/local/` wholesale by default.
 - Treat `.taskrunner/sessions/` as portable project history that normally moves
   with project pushes and pulls.
-- Do not place git worktrees inside `.taskrunner/`; Taskrunner may reference
-  them from local runtime state, but worktree directories themselves should live
-  in a Taskrunner-managed local runtime root outside the project tree.
+- Do not place task workspaces (worktrees or task clones) inside
+  `.taskrunner/`; Taskrunner may reference them from local runtime state, but
+  workspace directories themselves should live in a Taskrunner-managed local
+  runtime root outside the project tree.
 
 Portability rule:
 
@@ -520,6 +568,8 @@ Implementation rules:
 - `context`: optional task/session/artifact refs to preload.
 - `policy`: optional requested expansions such as network or package install.
 - `metadata`: optional caller identity and correlation data.
+- `wait`: optional; block until the turn completes instead of returning
+  immediately.
 
 `assign-task` response:
 
@@ -532,6 +582,10 @@ Implementation rules:
 - `changed_files`
 - `artifacts`
 - `error`
+
+Without `wait`, the response returns immediately with a running status and the
+result fields populate as the turn progresses; `lookup-task` retrieves them.
+With `wait`, the response carries the completed turn.
 
 `continue-task` request:
 
@@ -550,12 +604,18 @@ Implementation rules:
 
 - One of `task_id`, `session_id`, or a constrained project-scoped query.
 - Optional `include` fields such as `turns`, `artifacts`, `audit`,
-  `approvals`, `memory`, or `diff`.
+  `approvals`, `memory`, `diff`, or `trace`.
+- Optional `scope` for history and trace expansion: a single `turn_id`, the
+  last N exchanges, a whole session, or a whole task.
 - Optional pagination controls for expanded results.
 
 `lookup-task` response:
 
 - Compact task or task-list summaries by default.
+- Conversation history returned as paired prompt/response exchanges in turn
+  order.
+- `trace` expansions replay each in-scope turn end-to-end: inputs, observable
+  worker activity, and outputs, per the history presentation rules.
 - Expansion blocks only for requested `include` fields.
 - Artifact refs returned as handles, not inline large payloads.
 
@@ -587,7 +647,7 @@ Error codes:
 Default risk tiers:
 
 - `read-only`: lookup, audit, memory, and other non-mutating operations.
-- `workspace-write`: isolated delegated edits inside the task worktree with no
+- `workspace-write`: isolated delegated edits inside the task workspace with no
   network.
 - `networked`: delegated work that needs outbound network or package install.
 - `privileged`: host-level operations, broad mounts, or exceptional credential
@@ -606,10 +666,10 @@ Global hard limits:
 
 - No silent delegation of ordinary client work.
 - No broad host home, shell profile, or secret inheritance into workers.
-- No concurrent writers in the same task worktree.
+- No concurrent writers in the same task workspace.
 - Network and package installation start disabled.
 - Taskrunner host operations stay limited to orchestration, storage, policy,
-  git/worktree management, artifact/session-state copy-out, worker lifecycle,
+  git/workspace management, artifact/session-state copy-out, worker lifecycle,
   and cleanup.
 
 Project-expandable settings:
@@ -639,7 +699,9 @@ Default retention:
   snapshots, memory records, and compact audit metadata.
 - Expirable large artifacts are retained for 90 days by default:
   raw worker event streams, verbose logs, imported supporting material, and
-  large patch bundles.
+  large patch bundles. Reasoning, command, and file-change events are extracted
+  from raw streams into protected audit records, so stream expiry does not
+  hollow out trace views.
 - Project-local machine caches under `.taskrunner/local/` are best-effort and
   may be deleted at any time.
 
@@ -648,6 +710,9 @@ Protected records:
 - Sessions, tasks, turns, approvals, instruction snapshots, memory records, and
   the minimal audit/event records required to reconstruct history are protected
   from automatic cleanup.
+- Prompt/response bodies and worker reasoning events are protected so trace
+  views stay complete for the life of the record; only bulky raw event streams
+  and verbose logs are expirable.
 
 Capacity policy:
 
@@ -675,7 +740,8 @@ Wrapper capture baseline for supported clients:
 
 - Launch command, arguments, timestamp, cwd, detected project root, and exit
   status.
-- Raw terminal transcript when PTY capture is possible.
+- No raw terminal transcript capture in the baseline; wrappers stay thin
+  session-boundary shims per the client capture model.
 - Explicit Taskrunner tool calls and delegation requests.
 - A durable Taskrunner session boundary even when structured prompt/response
   parsing is unavailable.
@@ -733,6 +799,58 @@ Resume and event-stream posture:
 - If Claude CLI proves stable, keep the harness contract aligned with Codex:
   start turn, resume turn, capture worker-native session ID, stream events,
   capture final response, and detect changed files.
+
+### 8. Process model
+
+- One local Taskrunner daemon per workstation owns the database, event log,
+  locks, policy checks, and worker lifecycle.
+- Clients connect through thin shims: a stdio MCP shim per client process that
+  proxies to the daemon, or a local streamable HTTP endpoint where the client
+  supports it.
+- The daemon starting on demand (first shim connection or `taskrunner up`) is
+  preferred over requiring a manually managed service.
+- Single-writer guarantees are enforced by construction: only the daemon writes
+  durable state.
+
+### 9. Storage write path
+
+- Every durable record is appended to the JSONL event log first; SQLite is a
+  derived index rebuilt from the log at any time.
+- Delete-and-rebuild of the index is the universal recovery path.
+- This keeps the future cross-workstation sync design (see
+  `SYNC_PROPOSAL.md`) an additive feature rather than a storage migration.
+- Streamed worker events are appended to the audit log as they arrive during a
+  turn, not buffered until turn completion; only bulky artifacts and
+  worker-native session state wait for end-of-turn copy-out. A crashed turn
+  keeps its partial audit trail and is recorded as failed.
+
+### 10. Async delegation contract
+
+- `assign-task` and `continue-task` return immediately by default with a
+  running status; `wait` blocks for short tasks.
+- Every turn has a configurable timeout that terminates the worker and records
+  `worker_failed` with partial audit retained.
+- A running turn can be canceled; cancellation records a canceled status and
+  preserves the audit trail and workspace state. The cancellation tool name is
+  a naming candidate pending approval.
+- A `continue-task` call against a task with a running turn returns `conflict`.
+
+### 11. Implementation phases
+
+Build order treats the delegation broker as the product core and adds layers
+around it:
+
+- Phase 1, usable broker: daemon, the three MCP tools with the async contract,
+  Codex worker on the host in a task worktree, JSONL log plus SQLite index,
+  paired-exchange lookup, and trace view. No Docker, no wrappers, no memory
+  extraction.
+- Phase 2, safety: Docker workers with task clones, egress allowlist for
+  worker API access, enforced risk tiers and approvals, Claude worker after
+  its authenticated retest.
+- Phase 3, knowledge: memory extraction, markdown memory files, compact
+  summaries, Obsidian-compatible memory views.
+- Phase 4, reach: encrypted state-remote sync, wrapper shims, Gemini,
+  research workers, optional vector search.
 
 ## Supporting Documents
 
