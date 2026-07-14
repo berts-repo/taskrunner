@@ -47,13 +47,9 @@ be reviewed before implementation.
   - `assign-task`
   - `continue-task`
   - `lookup-task`
+  - `cancel-task`
 
 ## Candidate Terms
-
-### Cancellation Tool
-
-- `cancel-task`
-- `stop-task`
 
 ### Product or Project
 
@@ -109,6 +105,8 @@ be reviewed before implementation.
   - Universal Orchestrator
 - Integration-code terms:
   - adapter
+- Cancellation tool name:
+  - `stop-task`
 - Tool naming shapes:
   - `task.start`, `task.continue`, `task.lookup`
   - `dispatch.start`, `dispatch.continue`, `dispatch.lookup`

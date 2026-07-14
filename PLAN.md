@@ -305,6 +305,7 @@ Core tools:
 - `assign-task`
 - `continue-task`
 - `lookup-task`
+- `cancel-task`
 
 Specialized tools can be added when workflows need separate contracts:
 
@@ -444,7 +445,8 @@ Current approved naming decisions:
 - Optional setup unit: integration.
 - Enabled support unit: configured capability.
 - Shared prompt/skill unit: instruction.
-- Core MCP tool names: `assign-task`, `continue-task`, `lookup-task`.
+- Core MCP tool names: `assign-task`, `continue-task`, `lookup-task`,
+  `cancel-task`.
 
 ## Build-Spec Decisions
 
@@ -618,6 +620,17 @@ With `wait`, the response carries the completed turn.
   worker activity, and outputs, per the history presentation rules.
 - Expansion blocks only for requested `include` fields.
 - Artifact refs returned as handles, not inline large payloads.
+
+`cancel-task` request:
+
+- `task_id`
+- `reason`: optional caller-provided note recorded in the audit trail.
+
+`cancel-task` response:
+
+- `task_id`
+- `turn_id`: the turn that was running, when one was.
+- `status`: canceled, or the task's current status when nothing was running.
 
 Artifact handle shape:
 
@@ -830,9 +843,8 @@ Resume and event-stream posture:
   running status; `wait` blocks for short tasks.
 - Every turn has a configurable timeout that terminates the worker and records
   `worker_failed` with partial audit retained.
-- A running turn can be canceled; cancellation records a canceled status and
-  preserves the audit trail and workspace state. The cancellation tool name is
-  a naming candidate pending approval.
+- A running turn can be canceled with `cancel-task`; cancellation records a
+  canceled status and preserves the audit trail and workspace state.
 - A `continue-task` call against a task with a running turn returns `conflict`.
 
 ### 11. Implementation phases
