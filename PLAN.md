@@ -441,6 +441,8 @@ Current approved naming decisions:
 - Durable client interaction record: session.
 - Execution runtime: worker.
 - Worker integration code: worker harness.
+- Per-task isolated git copy (worktree on host, clone in Docker): task
+  workspace.
 - Stored output: artifact.
 - Optional setup unit: integration.
 - Enabled support unit: configured capability.

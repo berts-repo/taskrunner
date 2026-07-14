@@ -31,6 +31,8 @@ be reviewed before implementation.
 - Durable client interaction record: session
 - Execution runtime: worker
 - Worker integration code: worker harness
+- Per-task isolated git copy (worktree on host, clone in Docker): task
+  workspace
 - Stored output: artifact
 - Optional client or worker setup unit: integration
 - Enabled client or worker support: configured capability
