@@ -3,8 +3,8 @@
 Status: possible addition, not adopted. This is a design writeup for review,
 not a committed part of the baseline plan in `PLAN.md`. One piece has since
 been adopted into the baseline: the log-first write path (event log as source
-of truth, SQLite as derived index) now lives in `PLAN.md` build-spec section 9,
-which keeps this proposal additive if adopted.
+of truth, SQLite as derived index) now lives in `PLAN.md` build-spec
+§ Storage write path, which keeps this proposal additive if adopted.
 
 ## Why this exists
 
@@ -14,7 +14,8 @@ Two pressures point at the same feature:
    desktop, VM) with durable sessions, memory, and resumable delegated tasks
    following them.
 2. The current baseline makes `.taskrunner/sessions/` git-backed portable
-   history committed and pushed with the project (`PLAN.md:471`, `:488-491`).
+   history committed and pushed with the project (`PLAN.md` § Project-local
+   file layout, sessions path and git posture).
    Captured prompts, responses, and summaries riding the project's shared git
    remote is a disclosure risk that redaction cannot fully close, and git
    history makes it effectively unrevocable.
@@ -39,7 +40,8 @@ separate design (curated, redacted export rather than full-fidelity sync).
 
 ## What the DB provides (and what is actually sensitive)
 
-The durable schema (`PLAN.md:516-555`) is mostly operational and structural, not
+The durable schema (`PLAN.md` § Database schema) is mostly operational and
+structural, not
 prompt/response content:
 
 - Project identity and resolution: `projects`, `project_aliases`.
@@ -64,10 +66,13 @@ they ever leave the machine."
 SQLite does not merge across machines. Instead:
 
 - The durable, synced artifact is a per-session / per-task append-only event log
-  (JSONL is already an export format, `PLAN.md:741`).
+  (JSONL is already an export format, `PLAN.md` § Retention defaults and export
+  format).
 - The local SQLite database becomes a derived index that can be rebuilt from the
-  log at any time. This matches the existing append-oriented stance (`:561`) and
-  the "delete-and-rebuild is allowed for derived state" rule (`:513`).
+  log at any time. This matches the existing append-oriented stance
+  (§ Database schema, implementation rules) and the "delete-and-rebuild is
+  allowed for derived state" rule (§ Project-local file layout, sync and
+  recovery rule).
 
 Append logs merge cleanly across machines, which removes almost all conflict
 complexity. SQLite stops being a thing we sync and becomes a cache.
@@ -77,10 +82,10 @@ complexity. SQLite stops being a thing we sync and becomes a cache.
 Separate from the project's code repo. Proposed v1 form: an encrypted private
 git "state repo".
 
-- Git push/pull semantics already match the baseline sync rules: explicit
-  push/pull (`PLAN.md:509`), one active writer per session (`:510`),
-  stash-and-rebuild over clever merging (`:511-512`). Those rules were correct;
-  they were only aimed at the wrong remote.
+- Git push/pull semantics already match the baseline sync rules (`PLAN.md`
+  § Project-local file layout, sync and recovery rule): explicit push/pull,
+  one active writer per session, stash-and-rebuild over clever merging. Those
+  rules were correct; they were only aimed at the wrong remote.
 - "Sign-in" is an existing GitHub/GitLab credential the user already has.
 - Sensitive payloads are encrypted with a user-held key before they leave the
   machine. Single user means a single key (OS keychain or passphrase-derived).
@@ -98,14 +103,15 @@ The project's code repo stays completely clean of session data.
 
 ### 4. Content-addressed artifact sync, lazy by default
 
-- `artifacts` already carry hashes (`PLAN.md:528`). Sync large blobs by
-  reference and pull on demand by hash rather than eagerly.
+- `artifacts` already carry hashes (`PLAN.md` § Database schema). Sync large
+  blobs by reference and pull on demand by hash rather than eagerly.
 - Large patch bundles and raw event streams stay on their existing expirable
-  retention tier (`:715`).
+  retention tier (§ Retention defaults and export format).
 
 ### 5. Explicit local-vs-synced boundary
 
-Reuses the existing `.taskrunner/local/` split (`PLAN.md:475-486`).
+Reuses the existing `.taskrunner/local/` split (`PLAN.md` § Project-local file
+layout).
 
 - Synced: the event log, memory, instruction snapshots, policy, artifact
   references.
@@ -117,8 +123,9 @@ Reuses the existing `.taskrunner/local/` split (`PLAN.md:475-486`).
 
 `taskrunner clone` (or auto-discovery from a user-global project to state-remote
 map): pull the event log, rebuild SQLite, decrypt with the user's key, ready.
-This satisfies the "project moves to a VM or another workstation" goal (`:501`)
-without touching the project's code repo.
+This satisfies the "project moves to a VM or another workstation" goal
+(§ Project-local file layout, portability rule) without touching the project's
+code repo.
 
 ## Ease-of-use additions (single machine)
 
@@ -127,14 +134,16 @@ frictionless to extend.
 
 - `taskrunner up`: start the server, detect installed clients/workers on PATH,
   write their MCP configs, and populate `capabilities` automatically. Clients
-  without native MCP get the portable wrapper (`PLAN.md:45`, `:62`).
+  without native MCP get the portable wrapper (`PLAN.md` § Client Capture
+  Model).
 - No explicit project creation: resolve the project from the git root / cwd via
-  `projects` and `project_aliases` (`:520-521`); task workspaces resolve back to
-  their origin project.
-- Working defaults for risk tier, retention, and redaction (`:375`, `:392`,
-  `:699`); config-file-first but optional.
+  `projects` and `project_aliases` (§ Database schema); task workspaces resolve
+  back to their origin project.
+- Working defaults for risk tier, retention, and redaction (§ Policy,
+  Retention, And Redaction; § Risk tiers and default policy); config-file-first
+  but optional.
 - `taskrunner status`: report exactly what is captured vs. not, reusing the
-  existing partial-capture message (`:786-788`).
+  existing partial-capture message (§ Client-specific capture behavior).
 
 ## Resulting UX
 
@@ -142,7 +151,8 @@ frictionless to extend.
   the private state remote at session/task boundaries (not continuous).
 - Machine B: sign in once with an existing git credential, open the project, and
   full history, memory, and resumable delegated tasks are already present because
-  worker-native session IDs traveled in the log (`:525`).
+  worker-native session IDs traveled in the log (§ Database schema,
+  `worker_sessions`).
 
 One sign-in, every project follows the user.
 
@@ -154,10 +164,11 @@ One sign-in, every project follows the user.
 - Add the state remote as a first-class concept (encrypted, user-owned, separate
   from project git).
 - Add payload encryption and key management (currently the plan only has
-  pattern-based redaction, `:699`, which cannot make sharing safe on its own).
+  pattern-based redaction, § Risk tiers and default policy, which cannot make
+  sharing safe on its own).
 - Add a `workstations` table and active-writer / check-out mechanics.
-- Reframe the "Sync and recovery rule" section (`:507-514`) to target the state
-  remote, keeping its existing rules nearly verbatim.
+- Reframe the sync and recovery rule (§ Project-local file layout) to target
+  the state remote, keeping its existing rules nearly verbatim.
 
 ## Open questions
 
