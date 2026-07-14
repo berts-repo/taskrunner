@@ -57,14 +57,17 @@ It is designed to act as:
 
 ## Project Documents
 
-- [PLAN.md](./PLAN.md): holistic product and architecture plan.
-- [NAMING.md](./NAMING.md): approved and candidate naming register.
-- [BACKEND_SPIKE.md](./BACKEND_SPIKE.md): Codex and Claude worker spike results.
+- [PLAN.md](./docs/specs/PLAN.md): holistic product and architecture plan.
+- [NAMING.md](./docs/specs/NAMING.md): approved and candidate naming register.
+- [BACKEND_SPIKE.md](./docs/specs/BACKEND_SPIKE.md): Codex and Claude worker
+  spike results.
+- [SYNC_PROPOSAL.md](./docs/specs/SYNC_PROPOSAL.md): cross-workstation sync
+  proposal (not adopted).
 
 ## Status
 
-This repository is in planning and design cleanup. The core build-facing
-decisions now live in `PLAN.md`, including a phased build order. Phase 1 is a
-usable broker: the daemon, the three MCP tools with the async contract, a
+Phase 1 implementation is in progress. The core build-facing decisions live in
+`docs/specs/PLAN.md`, including a phased build order. Phase 1 is a usable
+broker: the daemon, the four core MCP tools with the async contract, a
 host-run Codex worker, the JSONL log plus SQLite index, and trace-capable
 lookup.

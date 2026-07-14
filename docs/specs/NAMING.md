@@ -50,6 +50,24 @@ be reviewed before implementation.
   - `continue-task`
   - `lookup-task`
   - `cancel-task`
+- Global state root: `~/.taskrunner/`
+- Global state root layout:
+  - Append-only event log (source of truth): `events.jsonl`
+  - Derived SQLite index (rebuildable): `index.db`
+  - Content-addressed artifact store: `artifacts/`
+  - Task workspaces: `workspaces/<task_id>/`
+  - Ephemeral process state (`daemon.sock`, `daemon.pid`, `daemon.lock`):
+    `runtime/`
+  - Daemon operational logs: `logs/`
+  - Global TOML config: `config.toml`
+- CLI commands: `taskrunner up`, `taskrunner down`, `taskrunner status`,
+  `taskrunner mcp`
+- Task workspace git branch: `taskrunner/<task_id>`
+- Record ID shape: prefixed lowercase ULIDs (`task_…`, `turn_…`, `sess_…`,
+  `art_…`, `evt_…`, `proj_…`)
+- Initial global config keys: `[daemon]`, `[task] turn_timeout_seconds`,
+  `[worker.codex] command`
+- Planning-docs directory: `docs/specs/`
 
 ## Candidate Terms
 

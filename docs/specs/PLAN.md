@@ -854,8 +854,9 @@ Resume and event-stream posture:
 Build order treats the delegation broker as the product core and adds layers
 around it:
 
-- Phase 1, usable broker: daemon, the three MCP tools with the async contract,
-  Codex worker on the host in a task worktree, JSONL log plus SQLite index,
+- Phase 1, usable broker: daemon, the four core MCP tools with the async
+  contract, Codex worker on the host in a task worktree, JSONL log plus SQLite
+  index,
   paired-exchange lookup, and trace view. No Docker, no wrappers, no memory
   extraction.
 - Phase 2, safety: Docker workers with task clones, egress allowlist for
