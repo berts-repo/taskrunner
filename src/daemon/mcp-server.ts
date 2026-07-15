@@ -3,9 +3,9 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import { ToolError } from "../domain/errors.js";
-import { getTaskSnapshot, listTurns } from "../domain/tasks.js";
 import type { StatePaths } from "../paths.js";
-import { renderCancel, renderOutcome, renderTaskDetail } from "../render.js";
+import { renderCancel, renderOutcome } from "../render.js";
+import { lookupTask } from "./lookup.js";
 import type { ArtifactStore } from "../storage/artifacts.js";
 import type { EventBody, LogEvent } from "../storage/events.js";
 import type { StateIndex } from "../storage/index.js";
@@ -121,15 +121,33 @@ export function createMcpServer(ctx: ToolContext): McpServer {
 
   tool(
     "lookup-task",
-    "Look up a delegated task: compact summary and its prompt/response exchanges.",
+    "Look up delegated tasks. Compact summary by default; expand with include " +
+      "(turns = paired prompt/response exchanges, trace = end-to-end replay of " +
+      "inputs/worker activity/outputs, audit, artifacts, diff). Scope narrows " +
+      "expansions to one turn or the last N exchanges. Pass project instead of " +
+      "task_id to list a project's tasks.",
     {
-      task_id: z.string(),
+      task_id: z.string().optional(),
+      project: z
+        .string()
+        .optional()
+        .describe("Absolute project path: list that project's tasks instead"),
+      include: z
+        .array(z.enum(["turns", "artifacts", "audit", "diff", "trace"]))
+        .optional(),
+      scope: z
+        .object({
+          turn_id: z.string().optional(),
+          last: z.number().int().positive().optional().describe("Last N exchanges"),
+        })
+        .optional(),
+      limit: z.number().int().positive().max(50).optional().describe("Max tasks to list"),
     },
-    async (args) => {
-      const snapshot = getTaskSnapshot(ctx.index, args.task_id);
-      if (!snapshot) throw new ToolError("not_found", `no task ${args.task_id}`);
-      return renderTaskDetail(snapshot, listTurns(ctx.index, args.task_id));
-    },
+    async (args) =>
+      lookupTask(
+        { index: ctx.index, artifacts: ctx.artifacts },
+        args as Parameters<typeof lookupTask>[1],
+      ),
   );
 
   tool(

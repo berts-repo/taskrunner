@@ -70,7 +70,7 @@ describe("MCP tool surface", () => {
 
     const lookup = await client.callTool({
       name: "lookup-task",
-      arguments: { task_id: taskId },
+      arguments: { task_id: taskId, include: ["turns"] },
     });
     const lookupText = toolText(lookup);
     expect(lookupText).toContain(">> make it so");

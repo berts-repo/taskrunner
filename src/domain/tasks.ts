@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import type { StateIndex } from "../storage/index.js";
 
 // Read-side helpers over the derived index. Turn statuses are
@@ -123,6 +124,61 @@ export function getTaskSnapshot(index: StateIndex, taskId: string): TaskSnapshot
     turn_count: n,
     latest_turn: latest ? toTurnInfo(latest) : null,
   };
+}
+
+/** Read-only project lookup: never creates records (unlike resolveProject). */
+export function findProjectByPath(
+  index: StateIndex,
+  path: string,
+): { project_id: string; root: string } | null {
+  const candidates = [path];
+  try {
+    candidates.push(fs.realpathSync(path));
+  } catch {
+    // Path may no longer exist; alias lookup can still hit.
+  }
+  for (const candidate of candidates) {
+    const row = index.db
+      .prepare(
+        `SELECT p.id AS project_id, p.root FROM project_aliases a
+         JOIN projects p ON p.id = a.project_id WHERE a.path = ?`,
+      )
+      .get(candidate) as { project_id: string; root: string } | undefined;
+    if (row) return row;
+  }
+  return null;
+}
+
+export function listTaskSnapshots(
+  index: StateIndex,
+  projectId: string,
+  limit: number,
+): TaskSnapshot[] {
+  const rows = index.db
+    .prepare(
+      "SELECT id FROM tasks WHERE project_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+    )
+    .all(projectId, limit) as { id: string }[];
+  return rows
+    .map((row) => getTaskSnapshot(index, row.id))
+    .filter((s): s is TaskSnapshot => s !== null);
+}
+
+export interface AuditRow {
+  ts: string;
+  kind: string;
+  payload: unknown;
+}
+
+export function getTurnAudit(index: StateIndex, turnId: string): AuditRow[] {
+  const rows = index.db
+    .prepare("SELECT ts, kind, payload FROM audit_events WHERE turn_id = ? ORDER BY ts, id")
+    .all(turnId) as { ts: string; kind: string; payload: string }[];
+  return rows.map((row) => ({
+    ts: row.ts,
+    kind: row.kind,
+    payload: JSON.parse(row.payload) as unknown,
+  }));
 }
 
 export function getTurnArtifacts(index: StateIndex, turnId: string): ArtifactHandle[] {

@@ -1,5 +1,4 @@
 import type { TurnOutcome } from "./daemon/scheduler.js";
-import type { TaskSnapshot, TurnInfo } from "./domain/tasks.js";
 import type { ArtifactHandle } from "./domain/tasks.js";
 
 // Tool responses are compact readable text with handles, not raw JSON blobs
@@ -41,30 +40,3 @@ export function renderCancel(result: {
   return lines.join("\n");
 }
 
-export function renderTaskDetail(snapshot: TaskSnapshot, turns: TurnInfo[]): string {
-  const lines = [
-    `task: ${snapshot.task_id}`,
-    `project: ${snapshot.project_root}`,
-    `worker: ${snapshot.worker}${
-      snapshot.worker_session_id ? ` (native session ${snapshot.worker_session_id})` : ""
-    }`,
-    `status: ${snapshot.status}`,
-    `about: ${snapshot.prompt_summary}`,
-    `turns: ${snapshot.turn_count}`,
-  ];
-  for (const turn of turns) {
-    lines.push("", `--- turn ${turn.idx + 1} (${turn.turn_id}, ${turn.status})`);
-    lines.push(`>> ${turn.prompt}`);
-    if (turn.response) lines.push(`<< ${turn.response}`);
-    if (turn.status === "failed") {
-      lines.push(`error ${turn.error_code}: ${turn.error_message ?? ""}`);
-    }
-    if (turn.status === "canceled" && turn.error_message) {
-      lines.push(`canceled: ${turn.error_message}`);
-    }
-    if (turn.changed_files.length > 0) {
-      lines.push("changed files:", ...turn.changed_files.map((f) => `  ${f}`));
-    }
-  }
-  return lines.join("\n");
-}
