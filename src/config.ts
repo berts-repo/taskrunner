@@ -20,6 +20,10 @@ const configSchema = z.object({
 
 export type Config = z.infer<typeof configSchema>;
 
+export function parseConfig(raw: unknown): Config {
+  return configSchema.parse(raw);
+}
+
 export function loadConfig(configFile: string): Config {
   let raw: unknown = {};
   try {

@@ -9,7 +9,15 @@ import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
 import { rebuildIndex, type StateIndex } from "../storage/index.js";
 import { VERSION } from "../version.js";
+import type { WorkerHarness } from "../workers/harness.js";
 import { createMcpServer, type ToolContext } from "./mcp-server.js";
+import { ProjectRootWorkspaces, Scheduler, type WorkspaceProvider } from "./scheduler.js";
+
+export interface DaemonOptions {
+  /** Configured worker harnesses; tests may inject a fake. */
+  harnesses?: Map<string, WorkerHarness>;
+  workspaces?: WorkspaceProvider;
+}
 
 export class AlreadyRunningError extends Error {
   constructor(readonly pid: number) {
@@ -41,9 +49,10 @@ export class Daemon {
     readonly index: StateIndex,
     readonly artifacts: ArtifactStore,
     private readonly server: http.Server,
+    readonly scheduler: Scheduler,
   ) {}
 
-  static async start(paths: StatePaths): Promise<Daemon> {
+  static async start(paths: StatePaths, options: DaemonOptions = {}): Promise<Daemon> {
     // sun_path is ~104 bytes on macOS; fail with a clear message instead of
     // a bare EINVAL from listen().
     if (Buffer.byteLength(paths.socketPath) > 100) {
@@ -61,7 +70,16 @@ export class Daemon {
       const config = loadConfig(paths.configFile);
       const artifacts = new ArtifactStore(paths.artifactsDir);
       const server = http.createServer();
-      const daemon = new Daemon(paths, config, log, index, artifacts, server);
+      let record!: (body: EventBody) => LogEvent;
+      const scheduler = new Scheduler({
+        config,
+        index,
+        record: (body) => record(body),
+        harnesses: options.harnesses ?? new Map(),
+        workspaces: options.workspaces ?? new ProjectRootWorkspaces(),
+      });
+      const daemon = new Daemon(paths, config, log, index, artifacts, server, scheduler);
+      record = (body) => daemon.record(body);
 
       daemon.recoverCrashedTurns();
       server.on("request", (req, res) => {
@@ -196,6 +214,7 @@ export class Daemon {
       config: this.config,
       index: this.index,
       artifacts: this.artifacts,
+      scheduler: this.scheduler,
       record: (body) => this.record(body),
       sessionId,
     };
@@ -204,6 +223,9 @@ export class Daemon {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    // Cancel running turns first so their terminal events land in the log
+    // before it closes.
+    await this.scheduler.shutdown();
     for (const session of this.sessions.values()) {
       await session.transport.close().catch(() => {});
     }
