@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Agent, fetch as undiciFetch } from "undici";
 import { Daemon } from "../../src/daemon/daemon.js";
+import { ProjectRootWorkspaces } from "../../src/daemon/scheduler.js";
 import { statePaths } from "../../src/paths.js";
 import { readEvents } from "../../src/storage/events.js";
 import { FakeHarness } from "../../src/workers/fake.js";
@@ -31,6 +32,7 @@ describe("MCP tool surface", () => {
     eventsLog = paths.eventsLog;
     daemon = await Daemon.start(paths, {
       harnesses: new Map([["fake", new FakeHarness()]]),
+      workspaces: new ProjectRootWorkspaces(),
     });
     client = new Client({ name: "tools-test", version: "0.0.1" });
     await client.connect(

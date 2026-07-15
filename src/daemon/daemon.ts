@@ -9,9 +9,11 @@ import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
 import { rebuildIndex, type StateIndex } from "../storage/index.js";
 import { VERSION } from "../version.js";
+import { CodexHarness } from "../workers/codex.js";
 import type { WorkerHarness } from "../workers/harness.js";
+import { WorktreeWorkspaces } from "../workspace/worktree.js";
 import { createMcpServer, type ToolContext } from "./mcp-server.js";
-import { ProjectRootWorkspaces, Scheduler, type WorkspaceProvider } from "./scheduler.js";
+import { Scheduler, type WorkspaceProvider } from "./scheduler.js";
 
 export interface DaemonOptions {
   /** Configured worker harnesses; tests may inject a fake. */
@@ -75,8 +77,15 @@ export class Daemon {
         config,
         index,
         record: (body) => record(body),
-        harnesses: options.harnesses ?? new Map(),
-        workspaces: options.workspaces ?? new ProjectRootWorkspaces(),
+        harnesses:
+          options.harnesses ??
+          new Map<string, WorkerHarness>([
+            ["codex", new CodexHarness(config.worker.codex.command)],
+          ]),
+        workspaces:
+          options.workspaces ??
+          new WorktreeWorkspaces(paths.workspacesDir, artifacts, (body) => record(body)),
+        artifacts,
       });
       const daemon = new Daemon(paths, config, log, index, artifacts, server, scheduler);
       record = (body) => daemon.record(body);

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config.js";
 import { ProjectRootWorkspaces, Scheduler } from "../../src/daemon/scheduler.js";
 import { ToolError } from "../../src/domain/errors.js";
+import { ArtifactStore } from "../../src/storage/artifacts.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { FakeHarness } from "../../src/workers/fake.js";
@@ -25,6 +26,7 @@ function makeScheduler(configOverrides: object = {}) {
     record,
     harnesses: new Map([["fake", new FakeHarness()]]),
     workspaces: new ProjectRootWorkspaces(),
+    artifacts: new ArtifactStore(join(root, "artifacts")),
   });
   const project = tempDir("proj");
   return { scheduler, index, logPath, project };
@@ -198,13 +200,13 @@ describe("Scheduler async contract", () => {
     const { scheduler, project } = makeScheduler();
     const started = Date.now();
     const [a, b] = await Promise.all([
-      scheduler.assignTask({ project, worker: "fake", prompt: "sleep:400 a", wait: true }),
-      scheduler.assignTask({ project, worker: "fake", prompt: "sleep:400 b", wait: true }),
+      scheduler.assignTask({ project, worker: "fake", prompt: "sleep:600 a", wait: true }),
+      scheduler.assignTask({ project, worker: "fake", prompt: "sleep:600 b", wait: true }),
     ]);
     expect(a.status).toBe("completed");
     expect(b.status).toBe("completed");
-    // Serial execution would take >= 800ms.
-    expect(Date.now() - started).toBeLessThan(750);
+    // Serial execution would take >= 1200ms; leave headroom for CI load.
+    expect(Date.now() - started).toBeLessThan(1100);
   });
 
   it("reuses one project record across tasks", async () => {

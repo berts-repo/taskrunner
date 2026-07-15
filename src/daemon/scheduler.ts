@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import { ToolError } from "../domain/errors.js";
 import { resolveProject } from "../domain/projects.js";
 import { getTaskSnapshot, getTurnArtifacts, type ArtifactHandle } from "../domain/tasks.js";
+import type { ArtifactStore } from "../storage/artifacts.js";
 import type { EventBody, LogEvent } from "../storage/events.js";
 import type { StateIndex } from "../storage/index.js";
 import type { WorkerHarness } from "../workers/harness.js";
@@ -46,6 +47,7 @@ export interface SchedulerDeps {
   record: (body: EventBody) => LogEvent;
   harnesses: Map<string, WorkerHarness>;
   workspaces: WorkspaceProvider;
+  artifacts: ArtifactStore;
 }
 
 interface RunningTurn {
@@ -195,6 +197,7 @@ export class Scheduler {
     const { record, index, workspaces, config } = this.deps;
     const { taskId, turnId } = entry;
     const timeoutSeconds = config.task.turn_timeout_seconds;
+    const rawEventLines: string[] = [];
     const timer = setTimeout(() => {
       entry.cancelReason ??= "timeout";
       entry.controller.abort();
@@ -212,6 +215,7 @@ export class Scheduler {
         // Streamed into the audit log as they arrive, not buffered
         // (PLAN § Storage write path).
         onEvent: (event) => {
+          rawEventLines.push(JSON.stringify(event));
           record({
             type: "audit.recorded",
             task_id: taskId,
@@ -273,6 +277,28 @@ export class Scheduler {
       }
     } finally {
       clearTimeout(timer);
+      // Bulky raw event streams are end-of-turn copy-out; the per-event audit
+      // records above are already durable (PLAN § Storage write path).
+      if (rawEventLines.length > 0) {
+        const stored = this.deps.artifacts.store(rawEventLines.join("\n") + "\n");
+        const artifactId = newId("art");
+        record({
+          type: "artifact.stored",
+          artifact_id: artifactId,
+          kind: "worker-events",
+          label: "raw worker events",
+          media_type: "application/jsonl",
+          size_bytes: stored.size_bytes,
+          sha256: stored.sha256,
+          locator: stored.locator,
+        });
+        record({
+          type: "artifact.linked",
+          artifact_id: artifactId,
+          task_id: taskId,
+          turn_id: turnId,
+        });
+      }
       this.running.delete(taskId);
     }
   }
