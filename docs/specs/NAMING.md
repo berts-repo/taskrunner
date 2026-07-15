@@ -68,18 +68,16 @@ be reviewed before implementation.
 - Initial global config keys: `[daemon]`, `[task] turn_timeout_seconds`,
   `[worker.codex] command`
 - Planning-docs directory: `docs/specs/`
-
-## Pending Review
-
-Names that emerged during the Phase 1 build and still need explicit approval:
-
 - State root override flag: `--state-root <dir>`
 - State root override env var: `TASKRUNNER_STATE_ROOT`
 - Turn statuses (in tool output, index, exports): `running`, `completed`,
-  `failed`, `canceled` (plus task status `created` before its first turn)
+  `failed`, `canceled`; failure cause is carried separately in `error_code`
+  (e.g. `worker_failed`), never baked into the status word
+- Task status before its first turn: `created`
 - Artifact kinds: `worker-events`, `diff`
 - Audit event kinds: `tool.<tool-name>`, `worker.<event-kind>`,
-  `worker.unparsed_output`
+  `worker.unparsed_output`. The segment after `worker.` is worker-native
+  vocabulary quoted verbatim, not a Taskrunner-owned name
 
 ## Candidate Terms
 
