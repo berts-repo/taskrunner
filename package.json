@@ -15,7 +15,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:e2e": "tsx scripts/verify-e2e.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

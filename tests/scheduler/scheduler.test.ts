@@ -198,15 +198,16 @@ describe("Scheduler async contract", () => {
 
   it("runs different tasks concurrently", async () => {
     const { scheduler, project } = makeScheduler();
-    const started = Date.now();
-    const [a, b] = await Promise.all([
-      scheduler.assignTask({ project, worker: "fake", prompt: "sleep:600 a", wait: true }),
-      scheduler.assignTask({ project, worker: "fake", prompt: "sleep:600 b", wait: true }),
-    ]);
-    expect(a.status).toBe("completed");
-    expect(b.status).toBe("completed");
-    // Serial execution would take >= 1200ms; leave headroom for CI load.
-    expect(Date.now() - started).toBeLessThan(1100);
+    const a = await scheduler.assignTask({ project, worker: "fake", prompt: "sleep:10000 a" });
+    const b = await scheduler.assignTask({ project, worker: "fake", prompt: "sleep:10000 b" });
+    // Two different tasks hold running turns at the same time (within one
+    // task this is impossible: continue-task returns conflict).
+    expect(scheduler.hasRunningTurn(a.task_id)).toBe(true);
+    expect(scheduler.hasRunningTurn(b.task_id)).toBe(true);
+    const canceledA = await scheduler.cancelTask({ task_id: a.task_id });
+    const canceledB = await scheduler.cancelTask({ task_id: b.task_id });
+    expect(canceledA.status).toBe("canceled");
+    expect(canceledB.status).toBe("canceled");
   });
 
   it("reuses one project record across tasks", async () => {

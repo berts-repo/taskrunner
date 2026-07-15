@@ -69,6 +69,18 @@ be reviewed before implementation.
   `[worker.codex] command`
 - Planning-docs directory: `docs/specs/`
 
+## Pending Review
+
+Names that emerged during the Phase 1 build and still need explicit approval:
+
+- State root override flag: `--state-root <dir>`
+- State root override env var: `TASKRUNNER_STATE_ROOT`
+- Turn statuses (in tool output, index, exports): `running`, `completed`,
+  `failed`, `canceled` (plus task status `created` before its first turn)
+- Artifact kinds: `worker-events`, `diff`
+- Audit event kinds: `tool.<tool-name>`, `worker.<event-kind>`,
+  `worker.unparsed_output`
+
 ## Candidate Terms
 
 ### Product or Project

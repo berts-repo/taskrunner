@@ -66,8 +66,25 @@ It is designed to act as:
 
 ## Status
 
-Phase 1 implementation is in progress. The core build-facing decisions live in
-`docs/specs/PLAN.md`, including a phased build order. Phase 1 is a usable
-broker: the daemon, the four core MCP tools with the async contract, a
-host-run Codex worker, the JSONL log plus SQLite index, and trace-capable
-lookup.
+Phase 1 (the usable broker) is implemented: the on-demand daemon, the stdio
+MCP shim with auto-start, the four core MCP tools with the async delegation
+contract, a host-run Codex worker in per-task worktrees, the JSONL event log
+with a rebuildable SQLite index, and trace-capable lookup. Later phases
+(Docker workers, risk tiers, memory, sync) are specified in
+`docs/specs/PLAN.md`.
+
+## Quick Start
+
+```sh
+npm install
+npm run build
+claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js mcp
+```
+
+The daemon starts on demand and keeps durable state under `~/.taskrunner/`.
+CLI: `taskrunner up | down | status | mcp` (`--state-root <dir>` overrides the
+state root).
+
+Tests: `npm test`. Full end-to-end check against the built CLI:
+`npx tsx scripts/verify-e2e.ts`. Live Codex delegation check (requires
+`codex login`): `TASKRUNNER_LIVE_CODEX=1 npx vitest run tests/workers/integration.test.ts`.

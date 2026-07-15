@@ -23,6 +23,8 @@ export interface ToolContext {
   record: (body: EventBody) => LogEvent;
   /** Durable Taskrunner session for the connected client. */
   sessionId: string;
+  /** Records session.started once; safe to call on every tool dispatch. */
+  ensureSessionStarted: () => void;
 }
 
 type ToolResult = CallToolResult;
@@ -53,6 +55,7 @@ export function createMcpServer(ctx: ToolContext): McpServer {
     // Cast: ToolCallback<Shape> is a conditional type over an unresolved
     // generic here, which TS refuses to unify with a concrete function.
     const callback = async (args: z.objectOutputType<Shape, z.ZodTypeAny>): Promise<ToolResult> => {
+      ctx.ensureSessionStarted();
       ctx.record({
         type: "audit.recorded",
         session_id: ctx.sessionId,

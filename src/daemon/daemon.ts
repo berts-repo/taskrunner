@@ -195,8 +195,10 @@ export class Daemon {
       started: false,
       ended: false,
     };
-    const mcpServer = createMcpServer(this.toolContext(session.taskrunnerSessionId));
-    mcpServer.server.oninitialized = () => {
+    // Must run before any event referencing this session is recorded. The
+    // initialized notification and the first tool call arrive as separate,
+    // concurrently handled POSTs, so the tool wrapper also calls this.
+    const ensureSessionStarted = () => {
       if (session.started) return;
       session.started = true;
       const client = mcpServer.server.getClientVersion();
@@ -206,6 +208,10 @@ export class Daemon {
         ...(client?.name ? { client: client.name } : {}),
       });
     };
+    const mcpServer = createMcpServer(
+      this.toolContext(session.taskrunnerSessionId, ensureSessionStarted),
+    );
+    mcpServer.server.oninitialized = ensureSessionStarted;
     session.transport.onclose = () => {
       if (session.transport.sessionId) this.sessions.delete(session.transport.sessionId);
       if (session.started && !session.ended) {
@@ -217,7 +223,7 @@ export class Daemon {
     await session.transport.handleRequest(req, res);
   }
 
-  private toolContext(sessionId: string): ToolContext {
+  private toolContext(sessionId: string, ensureSessionStarted: () => void): ToolContext {
     return {
       paths: this.paths,
       config: this.config,
@@ -226,6 +232,7 @@ export class Daemon {
       scheduler: this.scheduler,
       record: (body) => this.record(body),
       sessionId,
+      ensureSessionStarted,
     };
   }
 
