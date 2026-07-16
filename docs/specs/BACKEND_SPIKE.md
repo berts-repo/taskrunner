@@ -171,6 +171,36 @@ After Claude usage resets, rerun inside the authenticated Docker worker:
 - Confirm whether the session ID from a successful run can be resumed.
 - Compare Claude's edit/change events against Codex's `file_change` events.
 
+### Claude Docker Retest Result (2026-07-16)
+
+All retest items passed inside the authenticated container (image
+`uo-claude-worker:spike`, home volume `uo_claude_docker_home2`, non-root
+`worker`, workspace bind-mounted at `/workspace`):
+
+- Non-interactive start works: `claude --print --output-format json` returned
+  a structured success result with `session_id`.
+- File-edit run with `--output-format stream-json --verbose --permission-mode
+  acceptEdits` streamed events and created the requested file. The earlier
+  spike hang did not reproduce; it was most likely the unauthenticated state
+  plus a pending permission prompt.
+- Event shape per line: `system` (subtype `init`, carries `session_id`),
+  `assistant` messages whose content includes `thinking`, `text`, and
+  `tool_use` blocks (tool name plus full input, e.g. `Write`/`Edit` with
+  `file_path`), `user` tool results, occasional `rate_limit_event`, and a
+  final `result` with status, `num_turns`, cost, and usage.
+- Cross-container resume works: a fresh container with the same home volume
+  ran `--resume <session_id>`, kept the same session ID, retained context
+  ("the same file"), and applied a correct `Edit` to the existing file.
+- File-change comparison: Claude emits no dedicated `file_change` event
+  (unlike Codex). Changed files are derivable from `tool_use` inputs
+  (`Write`, `Edit`, `MultiEdit`, `NotebookEdit` → `file_path`), with git
+  status/diff in the workspace as the fallback, which the harness contract
+  already requires.
+
+Conclusion: Claude Code is confirmed viable as the additional Docker worker;
+`--permission-mode acceptEdits` (or stricter Taskrunner-brokered permissions)
+must always be set for non-interactive runs to avoid prompt hangs.
+
 The spike should ultimately produce:
 
 - Recommended worker starting point
