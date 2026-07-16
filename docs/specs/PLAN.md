@@ -186,6 +186,13 @@ Container posture:
 - Broad host secret mounts are avoided.
 - Coding containers have network disabled by default.
 - Package installation and network access require task-level approval.
+- Egress enforcement uses an egress proxy: worker containers sit on an
+  internal Docker network with no outside route; a proxy container spans the
+  internal and external networks and forwards only connections to domains on
+  that worker's `allowed_domains` list (plus per-task approved additions).
+  Refused attempts are logged as audit events. Cloud workers default to their
+  own API domains; a local-model worker defaults to only the local model port
+  on the host, keeping it internet-free.
 
 Taskrunner itself may run narrow host operations needed for orchestration,
 storage, policy checks, git workspace setup (worktrees and task clones),
@@ -203,6 +210,12 @@ Allowed by explicit configuration:
 - Narrow Codex auth volume.
 - Narrow Claude auth volume.
 - Other worker-specific auth material.
+
+Worker auth volumes hold a separate worker login (e.g. `codex login` run once
+into the volume), never a mount of the host's own auth file: host and
+container refreshing the same token invalidates the account
+(`refresh_token_reused`), and a worker compromise must not expose host
+credentials.
 
 Not inherited automatically:
 
@@ -677,6 +690,15 @@ Approval defaults:
 - `networked` requires task-level approval.
 - `privileged` always requires human approval.
 
+How approval is given (mixed by risk):
+
+- `networked`: approved in-conversation; the calling agent relays the user's
+  yes to Taskrunner, and the approval record shows it came through that agent.
+- `privileged`: approved only by the human running `taskrunner approve
+  <task_id>` (or `taskrunner deny <task_id>`) directly; agent-relayed
+  approval is not accepted for this tier.
+- Host-run (non-Docker) worker execution is classified `privileged`.
+
 Global hard limits:
 
 - No silent delegation of ordinary client work.
@@ -859,9 +881,13 @@ around it:
   index,
   paired-exchange lookup, and trace view. No Docker, no wrappers, no memory
   extraction.
-- Phase 2, safety: Docker workers with task clones, egress allowlist for
-  worker API access, enforced risk tiers and approvals, Claude worker after
-  its authenticated retest.
+- Phase 2, safety: Docker workers with task clones, egress proxy with
+  per-worker `allowed_domains`, enforced risk tiers and approvals (mixed by
+  risk: agent-relayed for `networked`, human `taskrunner approve` for
+  `privileged`), Claude worker after its authenticated retest. Host-run mode
+  is retained behind config as `privileged`. Stretch goal: local-model
+  worker (internet-free, local model port only). Sequencing starts with the
+  Claude authenticated Docker retest.
 - Phase 3, knowledge: memory extraction, markdown memory files, compact
   summaries, Obsidian-compatible memory views.
 - Phase 4, reach: encrypted state-remote sync, wrapper shims, Gemini,

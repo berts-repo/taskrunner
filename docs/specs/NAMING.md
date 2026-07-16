@@ -62,6 +62,12 @@ be reviewed before implementation.
   - Global TOML config: `config.toml`
 - CLI commands: `taskrunner up`, `taskrunner down`, `taskrunner status`,
   `taskrunner mcp`
+- Privileged-approval CLI commands: `taskrunner approve <task_id>`,
+  `taskrunner deny <task_id>`
+- Risk tier names: `read-only`, `workspace-write`, `networked`, `privileged`
+- Egress-filtering component: egress proxy
+- Egress config section: `[egress]`
+- Per-worker egress allowlist key: `allowed_domains`
 - Task workspace git branch: `taskrunner/<task_id>`
 - Record ID shape: prefixed lowercase ULIDs (`task_…`, `turn_…`, `sess_…`,
   `art_…`, `evt_…`, `proj_…`)
