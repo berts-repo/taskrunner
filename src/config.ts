@@ -10,6 +10,16 @@ const workerSchema = z.object({
   command: z.string().optional(),
   /** Where worker processes run; host is privileged and needs approval. */
   runtime: z.enum(["docker", "host"]).default("docker"),
+  /**
+   * Which harness code drives this worker. Defaults to the worker's own
+   * name, so `[worker.codex]` needs nothing; a custom worker names the loop
+   * it reuses (e.g. `[worker.qwen] harness = "codex"`).
+   */
+  harness: z.enum(["codex", "claude"]).optional(),
+  /** Model the harness asks for (e.g. "gpt-oss:20b", "qwen2.5-coder:32b"). */
+  model: z.string().optional(),
+  /** Local model server type; setting it puts the codex harness in --oss mode. */
+  provider: z.enum(["ollama", "lmstudio"]).optional(),
   image: z.string().optional(),
   auth_volume: z.string().optional(),
   /** Egress allowlist defaults: the worker's own API domains. */
@@ -46,6 +56,9 @@ const configSchema = z.object({
         })
         .default({}),
     })
+    // Workers are pluggable: any other `[worker.<name>]` section is parsed
+    // with the base schema and needs only a `harness` key to come alive.
+    .catchall(workerSchema)
     .default({}),
   egress: z
     .object({

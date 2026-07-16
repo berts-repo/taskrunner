@@ -227,6 +227,28 @@ internal network, and the egress proxy sidecar.
   at the wrong depth surface as 401 "Missing bearer" against
   `api.openai.com`, codex's unauthenticated fallback endpoint.
 
+## Local-Model Path Verification (2026-07-16)
+
+The codex `--oss` local-model path was verified containerized without
+installing Ollama, using a stand-in model server on the host that answers
+just enough of the API (`/api/version`, `/api/tags`, `/v1/responses`):
+
+- `CODEX_OSS_BASE_URL` is the knob that redirects codex `--oss` to a
+  non-localhost server; the harness sets it to
+  `http://host.docker.internal:<port>/v1` for docker turns.
+- codex speaks the **Responses API over SSE** (`POST /v1/responses`) to
+  local providers and requires the server to report Ollama ≥ 0.13.4 from
+  `/api/version` (older fake versions are rejected at startup).
+- Stage A (bridge, no proxy): turn completed with the scripted reply.
+- Stage B (exact DockerRunner topology — internal network, dual-homed
+  egress proxy, allowlist `["host.docker.internal:11434"]`): turn completed;
+  all model traffic traversed the proxy (`egress.allowed` ×5), and codex's
+  own outbound attempts (`chatgpt.com`, `ab.chatgpt.com`, `github.com`,
+  `api.github.com`) were refused and audited. A local-model worker has
+  provably zero internet.
+- Harmless: "Model metadata … not found. Defaulting to fallback metadata"
+  when the server is not a real Ollama; a real install won't show it.
+
 The spike should ultimately produce:
 
 - Recommended worker starting point

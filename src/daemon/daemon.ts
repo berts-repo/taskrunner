@@ -2,13 +2,12 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { loadConfig, type Config } from "../config.js";
+import { loadConfig, workerConfig, type Config, type WorkerConfig } from "../config.js";
 import { newId } from "../ids.js";
 import type { StatePaths } from "../paths.js";
 import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
 import { rebuildIndex, type StateIndex } from "../storage/index.js";
-import { workerConfig } from "../config.js";
 import { ToolError } from "../domain/errors.js";
 import { VERSION } from "../version.js";
 import { ClaudeHarness } from "../workers/claude.js";
@@ -24,6 +23,43 @@ export interface DaemonOptions {
   /** Configured worker harnesses; tests may inject a fake. */
   harnesses?: Map<string, WorkerHarness>;
   workspaces?: WorkspaceProvider;
+}
+
+// Workers are pluggable (PLAN § Worker Harness): a worker is a config entry,
+// and only this table knows which harness code exists. `harness` in config
+// selects the loop; the worker's name stays the user's to choose.
+const HARNESS_KINDS: Record<string, (cfg: WorkerConfig) => WorkerHarness> = {
+  codex: (cfg) =>
+    new CodexHarness({
+      ...(cfg.model ? { model: cfg.model } : {}),
+      ...(cfg.provider ? { provider: cfg.provider } : {}),
+    }),
+  claude: (cfg) => new ClaudeHarness(cfg.model ? { model: cfg.model } : {}),
+};
+
+/** Container mount point for each harness kind's auth material. */
+const AUTH_MOUNTS: Record<string, string> = {
+  // codex keeps everything under ~/.codex; claude spreads login and session
+  // state across the home directory (PLAN § Credentials).
+  codex: "/home/worker/.codex",
+  claude: "/home/worker",
+};
+
+/** Image fallback so config-only workers need no image key. */
+const DEFAULT_IMAGES: Record<string, string> = {
+  codex: "taskrunner/codex-worker",
+  claude: "taskrunner/claude-worker",
+};
+
+/** One harness instance per configured worker, driven purely by config. */
+export function buildHarnesses(config: Config): Map<string, WorkerHarness> {
+  const harnesses = new Map<string, WorkerHarness>();
+  for (const name of new Set(["codex", "claude", ...Object.keys(config.worker)])) {
+    const cfg = workerConfig(config, name);
+    const make = HARNESS_KINDS[cfg.harness ?? name];
+    if (make) harnesses.set(name, make(cfg));
+  }
+  return harnesses;
 }
 
 export class AlreadyRunningError extends Error {
@@ -82,24 +118,21 @@ export class Daemon {
       // container can mount safely (PLAN § Workspace And Isolation).
       const worktrees = new WorktreeWorkspaces(paths.workspacesDir, artifacts, (b) => record(b));
       const clones = new CloneWorkspaces(paths.workspacesDir, artifacts, (b) => record(b));
-      // Mount only the worker's own auth material, never broad host state
-      // (PLAN § Credentials): codex keeps everything under ~/.codex; claude
-      // spreads login and session state across the home directory.
-      const authMounts: Record<string, string> = {
-        codex: "/home/worker/.codex",
-        claude: "/home/worker",
-      };
       const makeRunner = (ctx: RunnerContext): WorkerRunner => {
         const cfg = workerConfig(config, ctx.worker);
         if (ctx.runtime === "host") return new HostRunner(ctx.workspaceDir, cfg.command);
+        // Mount only the worker's own auth material, never broad host state
+        // (PLAN § Credentials). Mounts and image fallbacks key on the harness
+        // kind, so config-only workers inherit their loop's layout.
+        const kind = cfg.harness ?? ctx.worker;
         // A missing image surfaces from the runner's preflight at start time,
         // so harnesses that never spawn a process (tests) are unaffected.
         return new DockerRunner({
           workspaceDir: ctx.workspaceDir,
           scopeId: ctx.turnId,
-          image: cfg.image ?? "",
+          image: cfg.image ?? DEFAULT_IMAGES[kind] ?? "",
           ...(cfg.auth_volume ? { authVolume: cfg.auth_volume } : {}),
-          ...(authMounts[ctx.worker] ? { authMount: authMounts[ctx.worker] as string } : {}),
+          ...(AUTH_MOUNTS[kind] ? { authMount: AUTH_MOUNTS[kind] as string } : {}),
           proxyImage: config.egress.proxy_image,
           allowedDomains: ctx.allowedDomains,
           onEgress: (decision) => {
@@ -117,12 +150,7 @@ export class Daemon {
         config,
         index,
         record: (body) => record(body),
-        harnesses:
-          options.harnesses ??
-          new Map<string, WorkerHarness>([
-            ["codex", new CodexHarness()],
-            ["claude", new ClaudeHarness()],
-          ]),
+        harnesses: options.harnesses ?? buildHarnesses(config),
         workspaces: (runtime) =>
           options.workspaces ?? (runtime === "host" ? worktrees : clones),
         makeRunner,

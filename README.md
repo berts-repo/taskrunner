@@ -103,6 +103,26 @@ setting up. The mount paths must match what the daemon uses (narrow
 buries the credentials where the worker can't see them, which surfaces as
 401 "Missing bearer" errors against `api.openai.com`.
 
+## Custom and local-model workers
+
+Workers are pluggable: any `[worker.<name>]` config section becomes a
+worker, with `harness` selecting the loop that drives it. A local model
+needs no login and no internet — the container's only route is the egress
+proxy, which forwards exactly one port to the model server on your machine:
+
+```toml
+[worker.qwen]
+harness = "codex"
+provider = "ollama"                # or "lmstudio"
+model = "qwen2.5-coder:32b"
+allowed_domains = ["host.docker.internal:11434"]
+```
+
+Install [Ollama](https://ollama.com) on the host, `ollama pull` the model,
+and `assign-task` with `worker: "qwen"`. Trying another model is another
+config section; the audit trail records which worker (and so which model)
+produced every turn.
+
 ## Quick Start
 
 ```sh

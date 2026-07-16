@@ -54,12 +54,33 @@ function relativeToWorkspace(path: string, workspacePath: string): string {
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
+export interface CodexHarnessOptions {
+  /** Model to request (cloud or local), passed as `-m`. */
+  model?: string;
+  /** Local model server type; presence switches codex into --oss mode. */
+  provider?: "ollama" | "lmstudio";
+}
+
 export class CodexHarness implements WorkerHarness {
   readonly name = "codex";
 
+  constructor(private readonly options: CodexHarnessOptions = {}) {}
+
   async runTurn(request: TurnRequest): Promise<TurnResult> {
     const sandbox = request.runner.kind === "docker" ? "danger-full-access" : "workspace-write";
-    const args = ["codex", "-a", "never", "-s", sandbox, "exec"];
+    const args = ["codex", "-a", "never", "-s", sandbox];
+    const env: Record<string, string> = {};
+    if (this.options.provider) {
+      args.push("--oss", "--local-provider", this.options.provider);
+      if (request.runner.kind === "docker") {
+        // Inside a container, "localhost" is the container; the model server
+        // sits on the host, reached only through the egress proxy.
+        const port = this.options.provider === "lmstudio" ? 1234 : 11434;
+        env["CODEX_OSS_BASE_URL"] = `http://host.docker.internal:${port}/v1`;
+      }
+    }
+    if (this.options.model) args.push("-m", this.options.model);
+    args.push("exec");
     if (request.nativeSessionId) {
       args.push("resume", "--json", request.nativeSessionId, request.prompt);
     } else {
@@ -68,7 +89,10 @@ export class CodexHarness implements WorkerHarness {
 
     // ToolErrors from runner preflight (docker down, image or auth volume
     // missing) propagate with their error codes intact.
-    const worker = await request.runner.start({ argv: args });
+    const worker = await request.runner.start({
+      argv: args,
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    });
 
     return new Promise<TurnResult>((resolve, reject) => {
       let threadId: string | undefined = request.nativeSessionId;

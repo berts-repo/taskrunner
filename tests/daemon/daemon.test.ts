@@ -1,4 +1,7 @@
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -7,6 +10,7 @@ import { AlreadyRunningError, Daemon } from "../../src/daemon/daemon.js";
 import { statePaths } from "../../src/paths.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
 import { tempDir } from "../helpers.js";
+import { writeFakeCodex } from "../workers/fake-codex.js";
 
 function unixFetch(socketPath: string): typeof fetch {
   const agent = new Agent({ connect: { socketPath } });
@@ -90,6 +94,49 @@ describe("Daemon", () => {
     expect(last.type).toBe("turn.failed");
     // The pre-crash audit trail is untouched.
     expect(events.filter((e) => e.type === "audit.recorded")).toHaveLength(1);
+  });
+
+  it("runs a worker that exists only in config, end to end", async () => {
+    // The pluggability acceptance test: no injected harnesses, no code that
+    // knows this worker's name — just a [worker.<name>] config section.
+    const root = tempDir("daemon");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      `[worker.configling]\nharness = "codex"\ncommand = "${writeFakeCodex()}"\nruntime = "host"\n`,
+    );
+
+    const repo = tempDir("repo");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "T");
+    writeFileSync(join(repo, "README.md"), "hi\n");
+    git("add", ".");
+    git("commit", "-qm", "init");
+
+    const daemon = await startDaemon(root);
+    const assigned = await daemon.scheduler.assignTask({
+      project: repo,
+      worker: "configling",
+      prompt: "create hello",
+    });
+    // Host runtime keeps its privileged gate for config-defined workers too.
+    expect(assigned.tier).toBe("privileged");
+    expect(assigned.approval_state).toBe("pending");
+
+    await daemon.scheduler.approveTask(assigned.task_id);
+    let status = "";
+    for (let i = 0; i < 200; i++) {
+      status = daemon.scheduler.outcome(assigned.task_id).status;
+      if (status !== "running" && status !== "created") break;
+      await sleep(25);
+    }
+    expect(status).toBe("completed");
+    const final = daemon.scheduler.outcome(assigned.task_id);
+    expect(final.summary).toContain("create hello");
+    expect(final.changed_files).toEqual(["hello.txt"]);
   });
 
   it("records session.started/ended for MCP sessions", async () => {

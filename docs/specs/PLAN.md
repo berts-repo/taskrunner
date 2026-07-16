@@ -123,6 +123,24 @@ Taskrunner is the broker between clients and workers.
 
 ## Worker Harness
 
+**Workers are pluggable — this is a core design principle, not a feature.**
+A worker is a config entry: `[worker.<name>]` with a `harness` key naming the
+loop that drives it, plus whatever `model`/`provider`/`image`/
+`allowed_domains` it needs. The broker (scheduler, storage, audit, tiers,
+runners, workspaces) never special-cases worker names; only the harness
+registry knows which harness kinds exist. The acceptance bar for any change
+touching workers: a new worker can be brought to life purely from config,
+with full audit/approval/egress parity. Example — a local model with no
+internet:
+
+```toml
+[worker.qwen]
+harness = "codex"
+provider = "ollama"
+model = "qwen2.5-coder:32b"
+allowed_domains = ["host.docker.internal:11434"]
+```
+
 All workers should fit behind a shared worker harness interface.
 
 The harness should support:
@@ -893,8 +911,10 @@ around it:
   per-worker `allowed_domains`, enforced risk tiers and approvals (mixed by
   risk: agent-relayed for `networked`, human `taskrunner approve` for
   `privileged`), Claude worker after its authenticated retest. Host-run mode
-  is retained behind config as `privileged`. Stretch goal: local-model
-  worker (internet-free, local model port only). Sequencing starts with the
+  is retained behind config as `privileged`. Stretch goal (delivered):
+  pluggable workers via the `harness` config key, with local-model workers
+  (`provider`/`model`, internet-free, local model port only) verified
+  end-to-end against a stand-in model server. Sequencing starts with the
   Claude authenticated Docker retest.
 - Phase 3, knowledge: memory extraction, markdown memory files, compact
   summaries, Obsidian-compatible memory views.

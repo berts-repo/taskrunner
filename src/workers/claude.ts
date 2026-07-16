@@ -34,11 +34,19 @@ function extractEditedFiles(message: ClaudeLine, workspacePath: string, into: Se
   }
 }
 
+export interface ClaudeHarnessOptions {
+  /** Model to request, passed as `--model`. */
+  model?: string;
+}
+
 export class ClaudeHarness implements WorkerHarness {
   readonly name = "claude";
 
+  constructor(private readonly options: ClaudeHarnessOptions = {}) {}
+
   async runTurn(request: TurnRequest): Promise<TurnResult> {
     const args = ["claude", "--print", "--output-format", "stream-json", "--verbose"];
+    if (this.options.model) args.push("--model", this.options.model);
     if (request.runner.kind === "docker") {
       args.push("--dangerously-skip-permissions");
     } else {

@@ -108,6 +108,12 @@ be reviewed before implementation.
   - Approval record ID prefix: `appr_`
   - Approval origin values (`via` on approval records): `agent`, `human`
   - npm script for building the Docker images: `build:images`
+- Pluggable-worker config keys (approved 2026-07-16 with the "do it now"
+  decision to close Phase 2): `harness` (selects the driving loop, defaults
+  to the worker's name), `model` (model the harness requests), `provider`
+  (local model server type: `ollama` | `lmstudio`; presence puts the codex
+  harness in --oss mode). Worker section names under `[worker.<name>]` are
+  free-form and user-chosen — they are not individually tracked here.
 
 ## Candidate Terms
 

@@ -1,7 +1,8 @@
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { CodexHarness } from "../../src/workers/codex.js";
 import type { WorkerEvent } from "../../src/workers/harness.js";
-import { HostRunner } from "../../src/workers/runner.js";
+import { HostRunner, type WorkerRunner, type WorkerSpawnSpec } from "../../src/workers/runner.js";
 import { tempDir } from "../helpers.js";
 import { writeFakeCodex } from "./fake-codex.js";
 
@@ -90,6 +91,53 @@ describe("CodexHarness", () => {
     });
     setTimeout(() => controller.abort(), 150);
     await expect(pending).rejects.toThrow(/terminated by abort/);
+  });
+
+  it("builds --oss argv for local-model workers", async () => {
+    const captured: WorkerSpawnSpec[] = [];
+    const runner: WorkerRunner = {
+      kind: "docker",
+      workspacePath: "/workspace",
+      start: (spec: WorkerSpawnSpec) => {
+        captured.push(spec);
+        return Promise.resolve({
+          stdout: Readable.from([]),
+          stderr: Readable.from([]),
+          exited: Promise.resolve(0),
+          kill() {},
+        });
+      },
+      dispose: () => Promise.resolve(),
+    };
+    const harness = new CodexHarness({ model: "gpt-oss:20b", provider: "ollama" });
+    await harness.runTurn({
+      workspaceDir: "/ws",
+      runner,
+      prompt: "hello",
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    expect(captured[0]!.argv).toEqual([
+      "codex",
+      "-a",
+      "never",
+      "-s",
+      "danger-full-access",
+      "--oss",
+      "--local-provider",
+      "ollama",
+      "-m",
+      "gpt-oss:20b",
+      "exec",
+      "--json",
+      "-C",
+      "/workspace",
+      "hello",
+    ]);
+    // The model server sits on the host; localhost would be the container.
+    expect(captured[0]!.env).toEqual({
+      CODEX_OSS_BASE_URL: "http://host.docker.internal:11434/v1",
+    });
   });
 
   it("rejects clearly when the codex binary is missing", async () => {
