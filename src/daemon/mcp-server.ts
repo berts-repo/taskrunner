@@ -84,15 +84,15 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         .boolean()
         .optional()
         .describe("Block until the turn completes instead of returning immediately"),
-      allow_domains: z
+      allowDomains: z
         .array(z.string())
         .optional()
         .describe(
           "Extra outbound domains the task may reach beyond the worker's API defaults " +
             "(e.g. registry.npmjs.org). Makes the task 'networked': you must ask the " +
-            "user for permission and set user_approved.",
+            "user for permission and set userApproved.",
         ),
-      user_approved: z
+      userApproved: z
         .boolean()
         .optional()
         .describe(
@@ -120,9 +120,9 @@ export function createMcpServer(ctx: ToolContext): McpServer {
           prompt: args.prompt,
           sessionId: ctx.sessionId,
           wait: args.wait ?? false,
-          ...(args.allow_domains ? { allowDomains: args.allow_domains } : {}),
+          ...(args.allowDomains ? { allowDomains: args.allowDomains } : {}),
           ...(args.runtime ? { runtime: args.runtime } : {}),
-          ...(args.user_approved !== undefined ? { userApproved: args.user_approved } : {}),
+          ...(args.userApproved !== undefined ? { userApproved: args.userApproved } : {}),
         }),
       ),
   );
@@ -133,7 +133,7 @@ export function createMcpServer(ctx: ToolContext): McpServer {
       "Returns immediately unless wait is true. Returns a conflict error while " +
       "a turn is already running.",
     {
-      task_id: z.string(),
+      taskId: z.string(),
       prompt: z.string().describe("Follow-up instruction text"),
       wait: z.boolean().optional(),
       metadata: z.record(z.unknown()).optional(),
@@ -141,7 +141,7 @@ export function createMcpServer(ctx: ToolContext): McpServer {
     async (args) =>
       renderOutcome(
         await ctx.scheduler.continueTask({
-          task_id: args.task_id,
+          task_id: args.taskId,
           prompt: args.prompt,
           wait: args.wait ?? false,
         }),
@@ -154,9 +154,9 @@ export function createMcpServer(ctx: ToolContext): McpServer {
       "(turns = paired prompt/response exchanges, trace = end-to-end replay of " +
       "inputs/worker activity/outputs, audit, artifacts, diff). Scope narrows " +
       "expansions to one turn or the last N exchanges. Pass project instead of " +
-      "task_id to list a project's tasks.",
+      "taskId to list a project's tasks.",
     {
-      task_id: z.string().optional(),
+      taskId: z.string().optional(),
       project: z
         .string()
         .optional()
@@ -166,7 +166,7 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         .optional(),
       scope: z
         .object({
-          turn_id: z.string().optional(),
+          turnId: z.string().optional(),
           last: z.number().int().positive().optional().describe("Last N exchanges"),
         })
         .optional(),
@@ -183,13 +183,13 @@ export function createMcpServer(ctx: ToolContext): McpServer {
     "cancel-task",
     "Cancel the running turn of a task. The audit trail and task workspace are preserved.",
     {
-      task_id: z.string(),
+      taskId: z.string(),
       reason: z.string().optional().describe("Recorded in the audit trail"),
     },
     async (args) =>
       renderCancel(
         await ctx.scheduler.cancelTask({
-          task_id: args.task_id,
+          task_id: args.taskId,
           ...(args.reason ? { reason: args.reason } : {}),
         }),
       ),

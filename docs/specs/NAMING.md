@@ -50,6 +50,11 @@ be reviewed before implementation.
   - `continue-task`
   - `lookup-task`
   - `cancel-task`
+- MCP tool argument casing: camelCase (`taskId`, `turnId`, `allowDomains`,
+  `userApproved`) — approved 2026-07-16. Arguments are JSON keys written by
+  agents, so they follow JSON convention; kebab-case stays on tool names and
+  CLI commands/flags, snake_case stays in TOML config keys and stored record
+  fields
 - Global state root: `~/.taskrunner/`
 - Global state root layout:
   - Append-only event log (source of truth): `events.jsonl`
@@ -98,7 +103,7 @@ none are considered approved until the user says so.
 - New config keys under `[worker.<name>]`: `runtime` (`"docker"` | `"host"`),
   `image`, `auth_volume`; new worker section `[worker.claude]`; egress key
   `[egress] proxy_image`
-- New `assign-task` tool arguments: `allow_domains`, `user_approved`,
+- New `assign-task` tool arguments: `allowDomains`, `userApproved`,
   `runtime`
 - Second worker name: `claude`
 - Audit event kinds for egress decisions: `egress.allowed`, `egress.refused`

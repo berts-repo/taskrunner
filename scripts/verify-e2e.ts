@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   );
   const early = await client.callTool({
     name: "continue-task",
-    arguments: { task_id: taskId, prompt: "too soon" },
+    arguments: { taskId: taskId, prompt: "too soon" },
   });
   check(
     "continue-task before approval returns approval_required",
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
   });
   const deniedCont = await client.callTool({
     name: "continue-task",
-    arguments: { task_id: denyId, prompt: "please?" },
+    arguments: { taskId: denyId, prompt: "please?" },
   });
   check(
     "taskrunner deny blocks the task from running",
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
   // 3. lookup until completed.
   let status = "";
   for (let i = 0; i < 100; i++) {
-    const lookup = await client.callTool({ name: "lookup-task", arguments: { task_id: taskId } });
+    const lookup = await client.callTool({ name: "lookup-task", arguments: { taskId: taskId } });
     status = /status: (\w+)/.exec(text(lookup))?.[1] ?? "";
     if (status !== "running") break;
     await sleep(100);
@@ -146,14 +146,14 @@ async function main(): Promise<void> {
   // 5. continue-task resumes the same native session.
   const cont = await client.callTool({
     name: "continue-task",
-    arguments: { task_id: taskId, prompt: "extend hello", wait: true },
+    arguments: { taskId: taskId, prompt: "extend hello", wait: true },
   });
   check("continue-task resumes same thread", /resumed thread-/.test(text(cont)));
 
   // 6. Trace replays both turns.
   const trace = await client.callTool({
     name: "lookup-task",
-    arguments: { task_id: taskId, include: ["trace"] },
+    arguments: { taskId: taskId, include: ["trace"] },
   });
   const traceText = text(trace);
   check(
@@ -172,12 +172,12 @@ async function main(): Promise<void> {
   approve(hangId); // starts the hanging turn
   const conflict = await client.callTool({
     name: "continue-task",
-    arguments: { task_id: hangId, prompt: "more" },
+    arguments: { taskId: hangId, prompt: "more" },
   });
   check("continue-task during running turn returns conflict", text(conflict).startsWith("error conflict:"));
   const cancel = await client.callTool({
     name: "cancel-task",
-    arguments: { task_id: hangId, reason: "verification cleanup" },
+    arguments: { taskId: hangId, reason: "verification cleanup" },
   });
   check("cancel-task lands canceled with audit", text(cancel).includes("status: canceled"));
 
@@ -197,7 +197,7 @@ async function main(): Promise<void> {
   await second.client.connect(second.transport); // auto-starts a fresh daemon past the stale lock
   const recovered = await second.client.callTool({
     name: "lookup-task",
-    arguments: { task_id: hang2Id },
+    arguments: { taskId: hang2Id },
   });
   check(
     "kill -9 recovery: interrupted turn recorded worker_failed",
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
   const summaryBefore = text(
     await second.client.callTool({
       name: "lookup-task",
-      arguments: { task_id: taskId, include: ["turns"] },
+      arguments: { taskId: taskId, include: ["turns"] },
     }),
   );
   await second.client.close().catch(() => {});
@@ -222,7 +222,7 @@ async function main(): Promise<void> {
   const summaryAfter = text(
     await third.client.callTool({
       name: "lookup-task",
-      arguments: { task_id: taskId, include: ["turns"] },
+      arguments: { taskId: taskId, include: ["turns"] },
     }),
   );
   check("index delete-and-rebuild yields identical lookup", summaryAfter === summaryBefore);

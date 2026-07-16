@@ -70,7 +70,7 @@ describe("MCP tool surface", () => {
 
     const lookup = await client.callTool({
       name: "lookup-task",
-      arguments: { task_id: taskId, include: ["turns"] },
+      arguments: { taskId: taskId, include: ["turns"] },
     });
     const lookupText = toolText(lookup);
     expect(lookupText).toContain(">> make it so");
@@ -86,14 +86,14 @@ describe("MCP tool surface", () => {
 
     const conflict = await client.callTool({
       name: "continue-task",
-      arguments: { task_id: taskId, prompt: "more" },
+      arguments: { taskId: taskId, prompt: "more" },
     });
     expect(conflict.isError).toBe(true);
     expect(toolText(conflict)).toContain("error conflict:");
 
     const cancel = await client.callTool({
       name: "cancel-task",
-      arguments: { task_id: taskId, reason: "test cleanup" },
+      arguments: { taskId: taskId, reason: "test cleanup" },
     });
     expect(toolText(cancel)).toContain("status: canceled");
   });

@@ -112,7 +112,7 @@ export class Scheduler {
       throw new ToolError(
         "approval_required",
         `this task needs outbound network access to: ${allowDomains.join(", ")}. ` +
-          "Ask the user for permission first, then retry with user_approved: true.",
+          "Ask the user for permission first, then retry with userApproved: true.",
       );
     }
 

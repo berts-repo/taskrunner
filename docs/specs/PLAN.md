@@ -579,6 +579,11 @@ Implementation rules:
 
 ### 3. MCP tool schemas
 
+Tool argument names use camelCase (`taskId`, `allowDomains`): they are JSON
+keys written by agents and read by code, so they follow JSON convention.
+Kebab-case stays on things typed in a shell (tool names, CLI commands and
+flags); snake_case stays in TOML config keys and stored record fields.
+
 `assign-task` request:
 
 - `project`: absolute project path or known project handle.
@@ -609,7 +614,7 @@ With `wait`, the response carries the completed turn.
 
 `continue-task` request:
 
-- `task_id`
+- `taskId`
 - `prompt`
 - `instructions`
 - `context`
@@ -622,10 +627,10 @@ With `wait`, the response carries the completed turn.
 
 `lookup-task` request:
 
-- One of `task_id`, `session_id`, or a constrained project-scoped query.
+- One of `taskId`, `sessionId`, or a constrained project-scoped query.
 - Optional `include` fields such as `turns`, `artifacts`, `audit`,
   `approvals`, `memory`, `diff`, or `trace`.
-- Optional `scope` for history and trace expansion: a single `turn_id`, the
+- Optional `scope` for history and trace expansion: a single `turnId`, the
   last N exchanges, a whole session, or a whole task.
 - Optional pagination controls for expanded results.
 
@@ -641,7 +646,7 @@ With `wait`, the response carries the completed turn.
 
 `cancel-task` request:
 
-- `task_id`
+- `taskId`
 - `reason`: optional caller-provided note recorded in the audit trail.
 
 `cancel-task` response:

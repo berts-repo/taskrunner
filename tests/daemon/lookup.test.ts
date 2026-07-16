@@ -72,7 +72,7 @@ beforeAll(async () => {
 
 describe("lookup-task", () => {
   it("returns a compact summary by default, with no expansions", () => {
-    const text = lookupTask(deps, { task_id: taskId });
+    const text = lookupTask(deps, { taskId: taskId });
     expect(text).toContain(`task: ${taskId}`);
     expect(text).toContain("status: completed");
     expect(text).toContain("turns: 2");
@@ -81,7 +81,7 @@ describe("lookup-task", () => {
   });
 
   it("include turns returns paired exchanges in turn order", () => {
-    const text = lookupTask(deps, { task_id: taskId, include: ["turns"] });
+    const text = lookupTask(deps, { taskId: taskId, include: ["turns"] });
     const first = text.indexOf(">> create hello");
     const second = text.indexOf(">> extend hello");
     expect(first).toBeGreaterThan(-1);
@@ -91,7 +91,7 @@ describe("lookup-task", () => {
   });
 
   it("include trace replays inputs, activity, and outputs per turn", () => {
-    const text = lookupTask(deps, { task_id: taskId, include: ["trace"] });
+    const text = lookupTask(deps, { taskId: taskId, include: ["trace"] });
     expect(text).toContain(`trace: turn 1 (${turnIds[0]}, completed)`);
     expect(text).toContain("inputs:");
     expect(text).toContain("prompt: create hello");
@@ -105,9 +105,9 @@ describe("lookup-task", () => {
 
   it("scope turn_id narrows expansions to one turn", () => {
     const text = lookupTask(deps, {
-      task_id: taskId,
+      taskId: taskId,
       include: ["turns"],
-      scope: { turn_id: turnIds[1]! },
+      scope: { turnId: turnIds[1]! },
     });
     expect(text).not.toContain(">> create hello");
     expect(text).toContain(">> extend hello");
@@ -115,7 +115,7 @@ describe("lookup-task", () => {
 
   it("scope last N returns only the trailing exchanges", () => {
     const text = lookupTask(deps, {
-      task_id: taskId,
+      taskId: taskId,
       include: ["turns"],
       scope: { last: 1 },
     });
@@ -124,14 +124,14 @@ describe("lookup-task", () => {
   });
 
   it("include artifacts lists handles, not payloads", () => {
-    const text = lookupTask(deps, { task_id: taskId, include: ["artifacts"] });
+    const text = lookupTask(deps, { taskId: taskId, include: ["artifacts"] });
     expect(text).toContain("worker-events");
     expect(text).toMatch(/art_\w+ {2}worker-events/);
     expect(text).toContain("bytes");
   });
 
   it("include audit lists per-turn audit rows", () => {
-    const text = lookupTask(deps, { task_id: taskId, include: ["audit"] });
+    const text = lookupTask(deps, { taskId: taskId, include: ["audit"] });
     expect(text).toContain(`audit: turn 1 (${turnIds[0]}`);
     expect(text).toContain("worker.turn.completed");
   });
@@ -151,13 +151,13 @@ describe("lookup-task", () => {
   });
 
   it("errors match the contract", () => {
-    expect(() => lookupTask(deps, {})).toThrowError(/task_id or project/);
-    expect(() => lookupTask(deps, { task_id: "task_nope" })).toThrowError(/no task/);
+    expect(() => lookupTask(deps, {})).toThrowError(/taskId or project/);
+    expect(() => lookupTask(deps, { taskId: "task_nope" })).toThrowError(/no task/);
     expect(() => lookupTask(deps, { project: "/nope/nothing" })).toThrowError(
       /no tasks recorded/,
     );
     expect(() =>
-      lookupTask(deps, { task_id: taskId, scope: { turn_id: "turn_nope" } }),
+      lookupTask(deps, { taskId: taskId, scope: { turnId: "turn_nope" } }),
     ).toThrowError(/no turn/);
   });
 });

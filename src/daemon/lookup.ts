@@ -20,10 +20,10 @@ import type { StateIndex } from "../storage/index.js";
 export type IncludeField = "turns" | "artifacts" | "audit" | "diff" | "trace";
 
 export interface LookupArgs {
-  task_id?: string;
+  taskId?: string;
   project?: string;
   include?: IncludeField[];
-  scope?: { turn_id?: string; last?: number };
+  scope?: { turnId?: string; last?: number };
   limit?: number;
 }
 
@@ -35,9 +35,9 @@ export interface LookupDeps {
 const DIFF_INLINE_LIMIT = 50_000;
 
 export function lookupTask(deps: LookupDeps, args: LookupArgs): string {
-  if (args.task_id) return lookupSingleTask(deps, args.task_id, args);
+  if (args.taskId) return lookupSingleTask(deps, args.taskId, args);
   if (args.project) return lookupProjectTasks(deps, args.project, args.limit ?? 10);
-  throw new ToolError("invalid_request", "provide task_id or project");
+  throw new ToolError("invalid_request", "provide taskId or project");
 }
 
 function lookupSingleTask(deps: LookupDeps, taskId: string, args: LookupArgs): string {
@@ -78,10 +78,10 @@ function applyScope(
   taskId: string,
 ): TurnInfo[] {
   if (!scope) return turns;
-  if (scope.turn_id) {
-    const hit = turns.filter((t) => t.turn_id === scope.turn_id);
+  if (scope.turnId) {
+    const hit = turns.filter((t) => t.turn_id === scope.turnId);
     if (hit.length === 0) {
-      throw new ToolError("not_found", `no turn ${scope.turn_id} in task ${taskId}`);
+      throw new ToolError("not_found", `no turn ${scope.turnId} in task ${taskId}`);
     }
     return hit;
   }
