@@ -48,6 +48,12 @@ function extractChangedFiles(obj: CodexLine, into: Set<string>): void {
   }
 }
 
+/** Codex reports paths as the worker saw them; make them workspace-relative. */
+function relativeToWorkspace(path: string, workspacePath: string): string {
+  const prefix = workspacePath.endsWith("/") ? workspacePath : `${workspacePath}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
 export class CodexHarness implements WorkerHarness {
   readonly name = "codex";
 
@@ -128,7 +134,9 @@ export class CodexHarness implements WorkerHarness {
             resolve({
               response: lastAgentMessage ?? "",
               ...(threadId ? { nativeSessionId: threadId } : {}),
-              changedFiles: [...changedFiles],
+              changedFiles: [...changedFiles].map((f) =>
+                relativeToWorkspace(f, request.runner.workspacePath),
+              ),
               ...(usage !== undefined ? { usage } : {}),
               exitCode: code,
             }),

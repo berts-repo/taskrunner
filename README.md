@@ -69,9 +69,39 @@ It is designed to act as:
 Phase 1 (the usable broker) is implemented: the on-demand daemon, the stdio
 MCP shim with auto-start, the four core MCP tools with the async delegation
 contract, a host-run Codex worker in per-task worktrees, the JSONL event log
-with a rebuildable SQLite index, and trace-capable lookup. Later phases
-(Docker workers, risk tiers, memory, sync) are specified in
-`docs/specs/PLAN.md`.
+with a rebuildable SQLite index, and trace-capable lookup. Phase 2 (safety)
+adds Docker workers in task-local clones behind a filtering egress proxy,
+risk tiers, and the approval flow. Later phases (memory, sync) are specified
+in `docs/specs/PLAN.md`.
+
+## Worker sign-in
+
+Docker workers authenticate from their own named volume — never from host
+credentials (`~/.codex`, `~/.claude`), which would let host and container
+sessions invalidate each other's refresh tokens. Build the images first
+(`npm run build:images`), then log each worker in once:
+
+```sh
+# Codex: device auth avoids the localhost callback, which cannot cross the
+# container boundary (the login server binds the container's loopback).
+# Mount the volume at ~/.codex — it holds only codex's own auth/session
+# state, and the daemon mounts it at that same narrow path during turns.
+docker run -it --rm -v taskrunner-codex-home:/home/worker/.codex \
+  taskrunner/codex-worker codex login --device-auth
+
+# Claude: the interactive login flow hands you a URL and takes a pasted
+# code. Claude spreads login state across the home directory, so its volume
+# mounts at the whole home.
+docker run -it --rm -v taskrunner-claude-home:/home/worker \
+  taskrunner/claude-worker claude /login
+```
+
+Open the URL each flow prints, approve, and the credentials land in the
+volume. Repeat only when a worker's login expires or a new machine needs
+setting up. The mount paths must match what the daemon uses (narrow
+`~/.codex` for codex, whole home for claude): logging in at the wrong path
+buries the credentials where the worker can't see them, which surfaces as
+401 "Missing bearer" errors against `api.openai.com`.
 
 ## Quick Start
 

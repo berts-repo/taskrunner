@@ -217,9 +217,15 @@ internal network, and the egress proxy sidecar.
   `egress.refused` for `http-intake.logs.us5.datadoghq.com` — Claude Code's
   telemetry endpoint was blocked by the allowlist while the actual work
   proceeded, which is exactly the intended egress posture.
-- Codex-in-docker remains unverified live: `taskrunner-codex-home` needs a
-  human-run `codex login` inside the volume first (separate-login decision);
-  the runner/proxy path it shares with Claude is proven above.
+- Codex-in-docker verified live the same day, after the user ran
+  `codex login --device-auth` into `taskrunner-codex-home`: turn completed
+  with the exact requested file on the task branch; all egress went to
+  `chatgpt.com`/`ab.chatgpt.com` (allowed and audited). Two lessons captured
+  in README § Worker sign-in and the `worker-login` skill: containers need
+  device auth (the localhost callback cannot cross the boundary), and the
+  login mount must match the daemon's narrow `~/.codex` mount — credentials
+  at the wrong depth surface as 401 "Missing bearer" against
+  `api.openai.com`, codex's unauthenticated fallback endpoint.
 
 The spike should ultimately produce:
 
