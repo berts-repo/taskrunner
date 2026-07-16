@@ -201,6 +201,26 @@ Conclusion: Claude Code is confirmed viable as the additional Docker worker;
 `--permission-mode acceptEdits` (or stricter Taskrunner-brokered permissions)
 must always be set for non-interactive runs to avoid prompt hangs.
 
+## Live Phase 2 Stack Verification (2026-07-16)
+
+A real Claude turn ran through the full built daemon stack (not spike
+containers): `assignTask(worker: "claude")` with the default docker runtime,
+`taskrunner/claude-worker` image, `taskrunner-claude-home` auth volume
+(migrated from the spike volume), task-local clone workspace, per-turn
+internal network, and the egress proxy sidecar.
+
+- Turn completed; `live.txt` was created with the exact requested content in
+  the clone workspace on branch `taskrunner/<task_id>`; raw worker events
+  landed as a linked artifact.
+- Egress audit trail: `egress.allowed` for `api.anthropic.com` and
+  `mcp-proxy.anthropic.com` (matched by the `*.anthropic.com` default), and
+  `egress.refused` for `http-intake.logs.us5.datadoghq.com` — Claude Code's
+  telemetry endpoint was blocked by the allowlist while the actual work
+  proceeded, which is exactly the intended egress posture.
+- Codex-in-docker remains unverified live: `taskrunner-codex-home` needs a
+  human-run `codex login` inside the volume first (separate-login decision);
+  the runner/proxy path it shares with Claude is proven above.
+
 The spike should ultimately produce:
 
 - Recommended worker starting point
