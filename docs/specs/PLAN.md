@@ -24,7 +24,9 @@ portable workstation experience rather than disconnected scope slices.
 - Always-on audit for every prompt and response Taskrunner can observe.
 - Explicit delegation to configured workers.
 - Project-scoped task records and continuation.
-- Lightweight automatic memory extraction from the audit stream.
+- Human-authored project memory records plus deterministic task summaries,
+  indexed and searchable; automatic extraction from the audit stream is
+  deferred.
 - Artifact capture for normal sessions and delegated work.
 - Task-specific isolated git workspaces as the code-state boundary for
   delegated coding: worktrees for host-run workers, task-local clones for
@@ -199,8 +201,8 @@ Container posture:
 - Coding workers run in Docker containers by default.
 - Research/fetch workers run in separate containers.
 - Containers are execution sandboxes, not the system of record.
-- Taskrunner database, audit log, artifact store, session graph, and extracted
-  memory stay outside worker containers.
+- Taskrunner database, audit log, artifact store, session graph, and memory
+  stay outside worker containers.
 - Containers should run as non-root where practical.
 - Workspace mounts should be narrow: only the task-local clone directory, and
   never the main repository or its `.git`.
@@ -260,7 +262,7 @@ Global durable state:
 - Session graph.
 - Task/turn graph.
 - Artifact metadata.
-- Extracted memory.
+- Indexed memory records.
 - Instruction snapshots.
 - Worker-native session references.
 - Policy and approval records.
@@ -278,7 +280,18 @@ state so projects can move across workstations cleanly.
 
 ## Memory And Context Control
 
-Memory starts as lightweight automatic extraction from the audit stream.
+Memory starts slim. The knowledge layer has two sources:
+
+- Compact task and turn summaries built deterministically from what workers
+  already return (final answer, status, changed files) — always on, no model
+  involved.
+- Human-authored memory records: when a decision or fact matters, the user
+  writes the note.
+
+No LLM reads the audit stream to write notes. Automatic extraction is
+deferred until the slim layer proves too thin in practice; because the audit
+trail retains the underlying evidence, extraction can be added later and
+backfilled over old tasks without rework.
 
 Memory records follow the instruction-package pattern: markdown files under
 `.taskrunner/memory/` are the human-readable, human-editable source of truth,
@@ -292,8 +305,10 @@ Memory records include:
 - Decisions.
 - Facts.
 - Follow-up tasks.
-- Compact session summaries.
-- Delegated task summaries.
+
+Compact task summaries come from the deterministic structural path, not from
+memory files. Session summaries are deferred along with automatic
+extraction.
 
 Retrieval behavior:
 
@@ -302,6 +317,12 @@ Retrieval behavior:
 - Compact by default.
 - Expand only when the user, agent, or workflow asks for detail.
 - Avoid loading broad history into active client context.
+- Memory reaches delegated workers only through explicit `context` refs or a
+  worker-initiated lookup; there is no automatic injection into worker
+  prompts.
+- External assistant tools (personal agent daemons, note systems) are
+  ordinary MCP clients: they pull project knowledge through the lookup
+  surface. Taskrunner does not push memory into other systems.
 
 Semantic/vector search is part of the target memory strategy when it improves
 retrieval quality, but plain structured/text retrieval should remain available
@@ -497,8 +518,8 @@ Portable shared paths under `.taskrunner/`:
 - `project.toml`: project identity and shared defaults.
 - `instructions/`: instruction packages, each with `instruction.toml` and
   `body.md`.
-- `memory/`: extracted memory records as markdown files, the editable source of
-  truth indexed and snapshotted by the database.
+- `memory/`: memory records as markdown files, the editable source of truth
+  indexed and snapshotted by the database.
 - `policy/`: shared project policy overlays and allowlists.
 - `imports/`: optional checked-in imported reference material intended to move
   with the project.
@@ -563,7 +584,8 @@ Initial durable tables:
   types.
 - `artifact_links`: joins between artifacts and sessions, tasks, turns, or
   audit events.
-- `memory_records`: extracted decisions, facts, follow-ups, and summaries.
+- `memory_records`: decisions, facts, and follow-ups from indexed memory
+  files.
 - `instruction_packages`: logical filesystem instruction identities.
 - `instruction_snapshots`: point-in-time bodies and metadata used by sessions,
   tasks, or turns.
@@ -916,8 +938,18 @@ around it:
   (`provider`/`model`, internet-free, local model port only) verified
   end-to-end against a stand-in model server. Sequencing starts with the
   Claude authenticated Docker retest.
-- Phase 3, knowledge: memory extraction, markdown memory files, compact
-  summaries, Obsidian-compatible memory views.
+- Phase 3, knowledge (slim scope decided 2026-07-16): deterministic compact
+  task summaries from existing worker output, project-scoped text search
+  across summaries and memory records, human-authored markdown memory files
+  under `.taskrunner/memory/` indexed by the database, and the MCP lookup
+  surface external assistant clients need to query project knowledge.
+  Explicitly out of scope: LLM memory extraction, automatic memory injection
+  into worker prompts, session summaries, and dedicated Obsidian views
+  (plain markdown files remain Obsidian-compatible on their own). Rationale:
+  the user runs a personal assistant agent as the daily knowledge hub;
+  Taskrunner stays the evidence store it queries, avoiding a second
+  knowledge garden. Automatic extraction remains a deferred enhancement,
+  backfillable from the retained audit trail if slim proves too thin.
 - Phase 4, reach: encrypted state-remote sync, wrapper shims, Gemini,
   research workers, optional vector search.
 
