@@ -89,29 +89,25 @@ be reviewed before implementation.
 - Audit event kinds: `tool.<tool-name>`, `worker.<event-kind>`,
   `worker.unparsed_output`. The segment after `worker.` is worker-native
   vocabulary quoted verbatim, not a Taskrunner-owned name
-
-## Pending Approval (Phase 2 build-emergent)
-
-Names that surfaced while building Phase 2. Recorded here for batch review;
-none are considered approved until the user says so.
-
-- Docker image names: `taskrunner/codex-worker`, `taskrunner/claude-worker`,
-  `taskrunner/egress-proxy`
-- Worker auth volume names: `taskrunner-codex-home`, `taskrunner-claude-home`
-- Per-turn Docker resource name prefixes: network `taskrunner-egress-<turn_id>`,
-  containers `taskrunner-proxy-<turn_id>` and `taskrunner-worker-<turn_id>`
-- New config keys under `[worker.<name>]`: `runtime` (`"docker"` | `"host"`),
-  `image`, `auth_volume`; new worker section `[worker.claude]`; egress key
-  `[egress] proxy_image`
-- New `assign-task` tool arguments: `allowDomains`, `userApproved`,
-  `runtime`
-- Second worker name: `claude`
-- Audit event kinds for egress decisions: `egress.allowed`, `egress.refused`
-- Approval state values (in tool output and index): `none`, `pending`,
-  `approved`, `denied`
-- Approval record ID prefix: `appr_`
-- Approval origin values (`via` on approval records): `agent`, `human`
-- npm script for building the Docker images: `build:images`
+- Phase 2 batch (approved 2026-07-16; `-worker` explicitly chosen over
+  `-runner` to keep `runner` for the internal placement layer):
+  - Docker image names: `taskrunner/codex-worker`, `taskrunner/claude-worker`,
+    `taskrunner/egress-proxy`
+  - Worker auth volume names: `taskrunner-codex-home`, `taskrunner-claude-home`
+  - Per-turn Docker resource name prefixes: network
+    `taskrunner-egress-<turn_id>`, containers `taskrunner-proxy-<turn_id>`
+    and `taskrunner-worker-<turn_id>`
+  - Config keys under `[worker.<name>]`: `runtime` (`"docker"` | `"host"`),
+    `image`, `auth_volume`; worker section `[worker.claude]`; egress key
+    `[egress] proxy_image`
+  - `assign-task` tool arguments: `allowDomains`, `userApproved`, `runtime`
+  - Second worker name: `claude`
+  - Audit event kinds for egress decisions: `egress.allowed`, `egress.refused`
+  - Approval state values (in tool output and index): `none`, `pending`,
+    `approved`, `denied`
+  - Approval record ID prefix: `appr_`
+  - Approval origin values (`via` on approval records): `agent`, `human`
+  - npm script for building the Docker images: `build:images`
 
 ## Candidate Terms
 
