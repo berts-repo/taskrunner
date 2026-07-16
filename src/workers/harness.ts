@@ -2,13 +2,18 @@
 // resume by worker-native session ID, stream structured events, capture the
 // final response, exit status, and changed files.
 
+import type { WorkerRunner } from "./runner.js";
+
 export interface WorkerEvent {
   kind: string;
   payload: unknown;
 }
 
 export interface TurnRequest {
+  /** Host path of the task workspace. */
   workspaceDir: string;
+  /** Where and how the worker process runs (host spawn or Docker container). */
+  runner: WorkerRunner;
   prompt: string;
   /** Resume this worker-native session when present. */
   nativeSessionId?: string;

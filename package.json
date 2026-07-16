@@ -16,7 +16,8 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:e2e": "tsx scripts/verify-e2e.ts"
+    "verify:e2e": "tsx scripts/verify-e2e.ts",
+    "build:images": "sh scripts/build-images.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

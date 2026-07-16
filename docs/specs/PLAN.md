@@ -159,11 +159,14 @@ Delegated coding workers should run in isolated workspaces.
 - Each delegated coding task gets a task-specific isolated git workspace.
 - The workspace mechanism depends on the runtime boundary:
   - Host-run workers use a task-specific git worktree.
-  - Docker workers use a task-local clone (`git clone --local` from the host
-    repository), because a worktree's `.git` file points back into the main
-    repository. Mounting only the worktree breaks git inside the container,
-    and mounting the main repository's `.git` writable would let a worker
-    plant hooks or config that execute on the host.
+  - Docker workers use a task-local clone (`git clone --no-hardlinks` from
+    the host repository), because a worktree's `.git` file points back into
+    the main repository. Mounting only the worktree breaks git inside the
+    container, and mounting the main repository's `.git` writable would let a
+    worker plant hooks or config that execute on the host. `--no-hardlinks`
+    matters: a default local clone hardlinks object files, which share inodes
+    with the host repository — a worker writing through one could corrupt
+    host history.
 - Docker task clones are fully self-contained and disposable. Completed work
   lands by fetching the task branch from the clone on the host side, followed
   by review; the worker never writes to the real repository.

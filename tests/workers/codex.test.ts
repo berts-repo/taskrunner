@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CodexHarness } from "../../src/workers/codex.js";
 import type { WorkerEvent } from "../../src/workers/harness.js";
+import { HostRunner } from "../../src/workers/runner.js";
 import { tempDir } from "../helpers.js";
 import { writeFakeCodex } from "./fake-codex.js";
 
@@ -9,14 +10,20 @@ function collect() {
   return { events, onEvent: (e: WorkerEvent) => events.push(e) };
 }
 
+/** Host runner whose command override points at the fake codex script. */
+function fakeRunner(workspace: string): HostRunner {
+  return new HostRunner(workspace, writeFakeCodex());
+}
+
 describe("CodexHarness", () => {
   it("parses spike-shaped JSONL: thread id, events, response, changed files, usage", async () => {
-    const harness = new CodexHarness(writeFakeCodex());
+    const harness = new CodexHarness();
     const workspace = tempDir("codex-ws");
     const { events, onEvent } = collect();
 
     const result = await harness.runTurn({
       workspaceDir: workspace,
+      runner: fakeRunner(workspace),
       prompt: "create hello",
       signal: new AbortController().signal,
       onEvent,
@@ -38,12 +45,13 @@ describe("CodexHarness", () => {
   });
 
   it("passes the native session id on resume", async () => {
-    const harness = new CodexHarness(writeFakeCodex());
+    const harness = new CodexHarness();
     const workspace = tempDir("codex-ws");
     const { onEvent } = collect();
 
     const result = await harness.runTurn({
       workspaceDir: workspace,
+      runner: fakeRunner(workspace),
       prompt: "continue please",
       nativeSessionId: "thread-existing",
       signal: new AbortController().signal,
@@ -54,11 +62,13 @@ describe("CodexHarness", () => {
   });
 
   it("rejects with stderr detail on nonzero exit", async () => {
-    const harness = new CodexHarness(writeFakeCodex());
+    const harness = new CodexHarness();
+    const workspace = tempDir("codex-ws");
     const { onEvent } = collect();
     await expect(
       harness.runTurn({
-        workspaceDir: tempDir("codex-ws"),
+        workspaceDir: workspace,
+        runner: fakeRunner(workspace),
         prompt: "exit-nonzero",
         signal: new AbortController().signal,
         onEvent,
@@ -67,11 +77,13 @@ describe("CodexHarness", () => {
   });
 
   it("kills the worker on abort", async () => {
-    const harness = new CodexHarness(writeFakeCodex());
+    const harness = new CodexHarness();
+    const workspace = tempDir("codex-ws");
     const controller = new AbortController();
     const { onEvent } = collect();
     const pending = harness.runTurn({
-      workspaceDir: tempDir("codex-ws"),
+      workspaceDir: workspace,
+      runner: fakeRunner(workspace),
       prompt: "hang",
       signal: controller.signal,
       onEvent,
@@ -81,11 +93,13 @@ describe("CodexHarness", () => {
   });
 
   it("rejects clearly when the codex binary is missing", async () => {
-    const harness = new CodexHarness("/nonexistent/codex-binary");
+    const harness = new CodexHarness();
+    const workspace = tempDir("codex-ws");
     const { onEvent } = collect();
     await expect(
       harness.runTurn({
-        workspaceDir: tempDir("codex-ws"),
+        workspaceDir: workspace,
+        runner: new HostRunner(workspace, "/nonexistent/codex-binary"),
         prompt: "x",
         signal: new AbortController().signal,
         onEvent,

@@ -84,6 +84,29 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         .boolean()
         .optional()
         .describe("Block until the turn completes instead of returning immediately"),
+      allow_domains: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Extra outbound domains the task may reach beyond the worker's API defaults " +
+            "(e.g. registry.npmjs.org). Makes the task 'networked': you must ask the " +
+            "user for permission and set user_approved.",
+        ),
+      user_approved: z
+        .boolean()
+        .optional()
+        .describe(
+          "Set true only after the user explicitly said yes to the extra network " +
+            "access in this conversation; the approval is recorded as relayed by you.",
+        ),
+      runtime: z
+        .enum(["docker", "host"])
+        .optional()
+        .describe(
+          "Where the worker runs. Default comes from config (docker). 'host' runs " +
+            "unsandboxed and is privileged: the task waits for the human to run " +
+            "taskrunner approve.",
+        ),
       metadata: z
         .record(z.unknown())
         .optional()
@@ -97,6 +120,9 @@ export function createMcpServer(ctx: ToolContext): McpServer {
           prompt: args.prompt,
           sessionId: ctx.sessionId,
           wait: args.wait ?? false,
+          ...(args.allow_domains ? { allowDomains: args.allow_domains } : {}),
+          ...(args.runtime ? { runtime: args.runtime } : {}),
+          ...(args.user_approved !== undefined ? { userApproved: args.user_approved } : {}),
         }),
       ),
   );

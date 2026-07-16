@@ -8,7 +8,8 @@ export type IdPrefix =
   | "turn"
   | "wsess"
   | "evt"
-  | "art";
+  | "art"
+  | "appr";
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid().toLowerCase()}`;

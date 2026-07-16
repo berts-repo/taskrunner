@@ -1,12 +1,19 @@
 import { newId } from "../ids.js";
-import type { Config } from "../config.js";
+import { workerConfig, type Config } from "../config.js";
 import { ToolError } from "../domain/errors.js";
+import { resolveTier, type RiskTier, type WorkerRuntime } from "../domain/policy.js";
 import { resolveProject } from "../domain/projects.js";
-import { getTaskSnapshot, getTurnArtifacts, type ArtifactHandle } from "../domain/tasks.js";
+import {
+  getTaskSnapshot,
+  getTurnArtifacts,
+  type ArtifactHandle,
+  type TaskSnapshot,
+} from "../domain/tasks.js";
 import type { ArtifactStore } from "../storage/artifacts.js";
 import type { EventBody, LogEvent } from "../storage/events.js";
 import type { StateIndex } from "../storage/index.js";
 import type { WorkerHarness } from "../workers/harness.js";
+import type { WorkerRunner } from "../workers/runner.js";
 
 /** Result contract shared by assign-task and continue-task (PLAN § MCP tool schemas). */
 export interface TurnOutcome {
@@ -15,6 +22,9 @@ export interface TurnOutcome {
   status: string;
   worker: string;
   worker_session_id: string | null;
+  tier: string | null;
+  /** none | pending | approved | denied */
+  approval_state: string;
   summary: string | null;
   changed_files: string[];
   artifacts: ArtifactHandle[];
@@ -25,14 +35,13 @@ export interface WorkspaceChanges {
   changedFiles: string[];
 }
 
-/** Provides the per-task isolated workspace. M3 runs in the project root;
- * the worktree implementation lands with the Codex worker. */
+/** Provides the per-task isolated workspace (worktree on host, clone for Docker). */
 export interface WorkspaceProvider {
   ensureWorkspace(taskId: string, projectRoot: string): Promise<string>;
   /** Optional git-based fallback when the harness reports nothing. */
   collectChanges?(workspaceDir: string): WorkspaceChanges;
-  /** Optional post-turn hook for diff artifacts and similar capture. */
-  afterTurn?(taskId: string, turnId: string, workspaceDir: string): void;
+  /** Optional post-turn hook: diff artifacts and clone-branch landing. */
+  afterTurn?(taskId: string, turnId: string, workspaceDir: string, projectRoot: string): void;
 }
 
 export class ProjectRootWorkspaces implements WorkspaceProvider {
@@ -41,12 +50,24 @@ export class ProjectRootWorkspaces implements WorkspaceProvider {
   }
 }
 
+/** Everything the runner factory needs to place one turn's worker process. */
+export interface RunnerContext {
+  runtime: WorkerRuntime;
+  worker: string;
+  workspaceDir: string;
+  taskId: string;
+  turnId: string;
+  /** Egress allowlist: worker API defaults plus approved task additions. */
+  allowedDomains: string[];
+}
+
 export interface SchedulerDeps {
   config: Config;
   index: StateIndex;
   record: (body: EventBody) => LogEvent;
   harnesses: Map<string, WorkerHarness>;
-  workspaces: WorkspaceProvider;
+  workspaces: (runtime: WorkerRuntime) => WorkspaceProvider;
+  makeRunner: (ctx: RunnerContext) => WorkerRunner;
   artifacts: ArtifactStore;
 }
 
@@ -60,10 +81,11 @@ interface RunningTurn {
 }
 
 /**
- * Turn lifecycle owner (PLAN § Async delegation contract): assign/continue
- * return immediately with a running status unless `wait`; one running turn
- * per task; turns serial within a task; tasks concurrent across tasks; every
- * turn has a timeout; running turns can be canceled with audit preserved.
+ * Turn lifecycle owner (PLAN § Async delegation contract, § Risk tiers and
+ * default policy): assign/continue return immediately with a running status
+ * unless `wait`; one running turn per task; every turn has a timeout; risk
+ * tiers gate what runs — networked needs a relayed user approval, privileged
+ * waits for a human `taskrunner approve`.
  */
 export class Scheduler {
   private readonly running = new Map<string, RunningTurn>();
@@ -76,11 +98,25 @@ export class Scheduler {
     prompt: string;
     sessionId?: string;
     wait?: boolean;
+    allowDomains?: string[];
+    runtime?: WorkerRuntime;
+    userApproved?: boolean;
   }): Promise<TurnOutcome> {
     const harness = this.harnessFor(args.worker);
     if (!args.prompt.trim()) throw new ToolError("invalid_request", "prompt must not be empty");
-    const project = resolveProject(this.deps.index, this.deps.record, args.project);
+    const allowDomains = args.allowDomains ?? [];
+    const runtime = args.runtime ?? workerConfig(this.deps.config, args.worker).runtime;
+    const tier = resolveTier(runtime, allowDomains);
 
+    if (tier === "networked" && !args.userApproved) {
+      throw new ToolError(
+        "approval_required",
+        `this task needs outbound network access to: ${allowDomains.join(", ")}. ` +
+          "Ask the user for permission first, then retry with user_approved: true.",
+      );
+    }
+
+    const project = resolveProject(this.deps.index, this.deps.record, args.project);
     const taskId = newId("task");
     this.deps.record({
       type: "task.created",
@@ -89,7 +125,30 @@ export class Scheduler {
       ...(args.sessionId ? { session_id: args.sessionId } : {}),
       worker: args.worker,
       prompt_summary: summarize(args.prompt),
+      tier,
+      runtime,
+      ...(allowDomains.length > 0 ? { allow_domains: allowDomains } : {}),
     });
+
+    if (tier === "networked") {
+      // The calling agent relayed the user's yes; the record says so.
+      this.deps.record({
+        type: "approval.recorded",
+        approval_id: newId("appr"),
+        task_id: taskId,
+        decision: "approved",
+        via: "agent",
+        domains: allowDomains,
+        ...(args.sessionId ? { session_id: args.sessionId } : {}),
+      });
+    }
+
+    if (tier === "privileged") {
+      // Only a human decision starts this task; the prompt waits with it.
+      this.deps.record({ type: "approval.requested", task_id: taskId, tier, prompt: args.prompt });
+      return this.outcome(taskId);
+    }
+
     return this.startTurn(taskId, project.root, harness, args.prompt, args.wait ?? false);
   }
 
@@ -98,8 +157,7 @@ export class Scheduler {
     prompt: string;
     wait?: boolean;
   }): Promise<TurnOutcome> {
-    const snapshot = getTaskSnapshot(this.deps.index, args.task_id);
-    if (!snapshot) throw new ToolError("not_found", `no task ${args.task_id}`);
+    const snapshot = this.snapshotFor(args.task_id);
     if (this.running.has(args.task_id)) {
       throw new ToolError(
         "conflict",
@@ -107,6 +165,7 @@ export class Scheduler {
       );
     }
     if (!args.prompt.trim()) throw new ToolError("invalid_request", "prompt must not be empty");
+    this.requireApproved(snapshot);
     const harness = this.harnessFor(snapshot.worker);
     return this.startTurn(
       args.task_id,
@@ -115,6 +174,47 @@ export class Scheduler {
       args.prompt,
       args.wait ?? false,
     );
+  }
+
+  /** Human decision via `taskrunner approve`; starts the waiting first turn. */
+  async approveTask(taskId: string): Promise<TurnOutcome> {
+    const snapshot = this.snapshotFor(taskId);
+    if (snapshot.approval_state !== "pending") {
+      throw new ToolError(
+        "invalid_request",
+        `task ${taskId} has no pending approval (state: ${snapshot.approval_state})`,
+      );
+    }
+    const prompt = snapshot.pending_prompt;
+    this.deps.record({
+      type: "approval.recorded",
+      approval_id: newId("appr"),
+      task_id: taskId,
+      decision: "approved",
+      via: "human",
+    });
+    if (!prompt) return this.outcome(taskId);
+    const harness = this.harnessFor(snapshot.worker);
+    return this.startTurn(taskId, snapshot.project_root, harness, prompt, false);
+  }
+
+  /** Human denial via `taskrunner deny`; the task never runs. */
+  async denyTask(taskId: string): Promise<TurnOutcome> {
+    const snapshot = this.snapshotFor(taskId);
+    if (snapshot.approval_state !== "pending") {
+      throw new ToolError(
+        "invalid_request",
+        `task ${taskId} has no pending approval (state: ${snapshot.approval_state})`,
+      );
+    }
+    this.deps.record({
+      type: "approval.recorded",
+      approval_id: newId("appr"),
+      task_id: taskId,
+      decision: "denied",
+      via: "human",
+    });
+    return this.outcome(taskId);
   }
 
   async cancelTask(args: { task_id: string; reason?: string }): Promise<{
@@ -152,6 +252,29 @@ export class Scheduler {
       entry.controller.abort();
     }
     await Promise.all(entries.map((entry) => entry.done));
+  }
+
+  private snapshotFor(taskId: string): TaskSnapshot {
+    const snapshot = getTaskSnapshot(this.deps.index, taskId);
+    if (!snapshot) throw new ToolError("not_found", `no task ${taskId}`);
+    return snapshot;
+  }
+
+  /** Enforces the task's approval state before any further turn runs. */
+  private requireApproved(snapshot: TaskSnapshot): void {
+    if (snapshot.approval_state === "pending") {
+      throw new ToolError(
+        "approval_required",
+        `task ${snapshot.task_id} is ${snapshot.tier} and waits for a human decision: ` +
+          `taskrunner approve ${snapshot.task_id} (or taskrunner deny ${snapshot.task_id})`,
+      );
+    }
+    if (snapshot.approval_state === "denied") {
+      throw new ToolError(
+        "policy_denied",
+        `task ${snapshot.task_id} was denied by the user and cannot run`,
+      );
+    }
   }
 
   private harnessFor(worker: string): WorkerHarness {
@@ -194,7 +317,7 @@ export class Scheduler {
     harness: WorkerHarness,
     prompt: string,
   ): Promise<void> {
-    const { record, index, workspaces, config } = this.deps;
+    const { record, config } = this.deps;
     const { taskId, turnId } = entry;
     const timeoutSeconds = config.task.turn_timeout_seconds;
     const rawEventLines: string[] = [];
@@ -203,12 +326,29 @@ export class Scheduler {
       entry.controller.abort();
     }, timeoutSeconds * 1000);
 
+    let runner: WorkerRunner | undefined;
     try {
+      const snapshot = this.snapshotFor(taskId);
+      const runtime = (snapshot.runtime ?? "docker") as WorkerRuntime;
+      const workspaces = this.deps.workspaces(runtime);
       const workspaceDir = await workspaces.ensureWorkspace(taskId, projectRoot);
-      const previousNativeId = getTaskSnapshot(index, taskId)?.worker_session_id ?? undefined;
+      const previousNativeId = snapshot.worker_session_id ?? undefined;
+
+      const workerCfg = workerConfig(config, snapshot.worker);
+      const approvedDomains =
+        snapshot.approval_state === "approved" ? snapshot.allow_domains : [];
+      runner = this.deps.makeRunner({
+        runtime,
+        worker: snapshot.worker,
+        workspaceDir,
+        taskId,
+        turnId,
+        allowedDomains: [...workerCfg.allowed_domains, ...approvedDomains],
+      });
 
       const result = await harness.runTurn({
         workspaceDir,
+        runner,
         prompt,
         ...(previousNativeId ? { nativeSessionId: previousNativeId } : {}),
         signal: entry.controller.signal,
@@ -240,7 +380,7 @@ export class Scheduler {
       if (changedFiles.length === 0 && workspaces.collectChanges) {
         changedFiles = workspaces.collectChanges(workspaceDir).changedFiles;
       }
-      workspaces.afterTurn?.(taskId, turnId, workspaceDir);
+      workspaces.afterTurn?.(taskId, turnId, workspaceDir, projectRoot);
 
       record({
         type: "turn.completed",
@@ -271,12 +411,13 @@ export class Scheduler {
           type: "turn.failed",
           turn_id: turnId,
           task_id: taskId,
-          error_code: "worker_failed",
+          error_code: err instanceof ToolError ? err.code : "worker_failed",
           error_message: err instanceof Error ? err.message : String(err),
         });
       }
     } finally {
       clearTimeout(timer);
+      await runner?.dispose().catch(() => {});
       // Bulky raw event streams are end-of-turn copy-out; the per-event audit
       // records above are already durable (PLAN § Storage write path).
       if (rawEventLines.length > 0) {
@@ -316,6 +457,8 @@ export class Scheduler {
       status: turn?.status ?? snapshot.status,
       worker: snapshot.worker,
       worker_session_id: snapshot.worker_session_id,
+      tier: snapshot.tier,
+      approval_state: snapshot.approval_state,
       summary: turn?.response ?? null,
       changed_files: turn?.changed_files ?? [],
       artifacts: turn ? getTurnArtifacts(this.deps.index, turn.turn_id) : [],

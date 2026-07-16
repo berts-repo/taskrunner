@@ -8,12 +8,17 @@ import type { StatePaths } from "../paths.js";
 import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
 import { rebuildIndex, type StateIndex } from "../storage/index.js";
+import { workerConfig } from "../config.js";
+import { ToolError } from "../domain/errors.js";
 import { VERSION } from "../version.js";
+import { ClaudeHarness } from "../workers/claude.js";
 import { CodexHarness } from "../workers/codex.js";
 import type { WorkerHarness } from "../workers/harness.js";
+import { DockerRunner, HostRunner, type WorkerRunner } from "../workers/runner.js";
+import { CloneWorkspaces } from "../workspace/clone.js";
 import { WorktreeWorkspaces } from "../workspace/worktree.js";
 import { createMcpServer, type ToolContext } from "./mcp-server.js";
-import { Scheduler, type WorkspaceProvider } from "./scheduler.js";
+import { Scheduler, type RunnerContext, type WorkspaceProvider } from "./scheduler.js";
 
 export interface DaemonOptions {
   /** Configured worker harnesses; tests may inject a fake. */
@@ -73,6 +78,41 @@ export class Daemon {
       const artifacts = new ArtifactStore(paths.artifactsDir);
       const server = http.createServer();
       let record!: (body: EventBody) => LogEvent;
+      // Host turns use worktrees; Docker turns use self-contained clones the
+      // container can mount safely (PLAN § Workspace And Isolation).
+      const worktrees = new WorktreeWorkspaces(paths.workspacesDir, artifacts, (b) => record(b));
+      const clones = new CloneWorkspaces(paths.workspacesDir, artifacts, (b) => record(b));
+      // Mount only the worker's own auth material, never broad host state
+      // (PLAN § Credentials): codex keeps everything under ~/.codex; claude
+      // spreads login and session state across the home directory.
+      const authMounts: Record<string, string> = {
+        codex: "/home/worker/.codex",
+        claude: "/home/worker",
+      };
+      const makeRunner = (ctx: RunnerContext): WorkerRunner => {
+        const cfg = workerConfig(config, ctx.worker);
+        if (ctx.runtime === "host") return new HostRunner(ctx.workspaceDir, cfg.command);
+        // A missing image surfaces from the runner's preflight at start time,
+        // so harnesses that never spawn a process (tests) are unaffected.
+        return new DockerRunner({
+          workspaceDir: ctx.workspaceDir,
+          scopeId: ctx.turnId,
+          image: cfg.image ?? "",
+          ...(cfg.auth_volume ? { authVolume: cfg.auth_volume } : {}),
+          ...(authMounts[ctx.worker] ? { authMount: authMounts[ctx.worker] as string } : {}),
+          proxyImage: config.egress.proxy_image,
+          allowedDomains: ctx.allowedDomains,
+          onEgress: (decision) => {
+            record({
+              type: "audit.recorded",
+              task_id: ctx.taskId,
+              turn_id: ctx.turnId,
+              kind: decision.allowed ? "egress.allowed" : "egress.refused",
+              payload: { host: decision.host, port: decision.port },
+            });
+          },
+        });
+      };
       const scheduler = new Scheduler({
         config,
         index,
@@ -80,11 +120,12 @@ export class Daemon {
         harnesses:
           options.harnesses ??
           new Map<string, WorkerHarness>([
-            ["codex", new CodexHarness(config.worker.codex.command)],
+            ["codex", new CodexHarness()],
+            ["claude", new ClaudeHarness()],
           ]),
-        workspaces:
-          options.workspaces ??
-          new WorktreeWorkspaces(paths.workspacesDir, artifacts, (body) => record(body)),
+        workspaces: (runtime) =>
+          options.workspaces ?? (runtime === "host" ? worktrees : clones),
+        makeRunner,
         artifacts,
       });
       const daemon = new Daemon(paths, config, log, index, artifacts, server, scheduler);
@@ -143,8 +184,50 @@ export class Daemon {
       await this.handleMcp(req, res);
       return;
     }
+    if ((url.pathname === "/approve" || url.pathname === "/deny") && req.method === "POST") {
+      await this.handleApproval(url.pathname, req, res);
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not_found" }));
+  }
+
+  /** Human approve/deny decisions arrive from the CLI over the socket. */
+  private async handleApproval(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    let taskId: string | undefined;
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { task_id?: unknown };
+      if (typeof body.task_id === "string") taskId = body.task_id;
+    } catch {
+      // Falls through to the invalid_request response below.
+    }
+    if (!taskId) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_request", message: "task_id required" }));
+      return;
+    }
+    try {
+      const outcome =
+        pathname === "/approve"
+          ? await this.scheduler.approveTask(taskId)
+          : await this.scheduler.denyTask(taskId);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(outcome));
+    } catch (err) {
+      if (err instanceof ToolError) {
+        const status = err.code === "not_found" ? 404 : 400;
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: err.code, message: err.message }));
+        return;
+      }
+      throw err;
+    }
   }
 
   private handleStatus(res: http.ServerResponse): void {

@@ -2,7 +2,9 @@
  * End-to-end verification of the built dist CLI per the approved plan:
  * shim auto-start, assign/lookup/continue/cancel, conflict, worktree branch,
  * kill -9 crash recovery, and index delete-and-rebuild. The codex worker
- * command is overridden in config.toml with the scripted stand-in binary.
+ * command is overridden in config.toml with the scripted stand-in binary and
+ * runs with runtime = "host", which also exercises the Phase 2 privileged
+ * approval choreography: every assign waits for `taskrunner approve`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -47,7 +49,7 @@ async function main(): Promise<void> {
   const fakeCodex = writeFakeCodex();
   fs.writeFileSync(
     join(STATE, "config.toml"),
-    `[task]\nturn_timeout_seconds = 120\n\n[worker.codex]\ncommand = "${fakeCodex}"\n`,
+    `[task]\nturn_timeout_seconds = 120\n\n[worker.codex]\ncommand = "${fakeCodex}"\nruntime = "host"\n`,
   );
 
   const repo = join(SCRATCH, "verify-repo");
@@ -67,14 +69,60 @@ async function main(): Promise<void> {
   await client.connect(transport);
   check("shim auto-starts daemon (pid file exists)", fs.existsSync(join(STATE, "runtime/daemon.pid")));
 
-  // 2. assign-task returns immediately with running status.
+  const approve = (id: string) =>
+    spawnSync(process.execPath, [CLI, "approve", id, "--state-root", STATE], {
+      encoding: "utf8",
+    });
+
+  // 2. assign-task on a host-runtime (privileged) worker waits for approval.
   const assign = await client.callTool({
     name: "assign-task",
     arguments: { project: repo, worker: "codex", prompt: "create hello" },
   });
   const assignText = text(assign);
   const taskId = /task: (task_\w+)/.exec(assignText)?.[1] ?? "";
-  check("assign-task returns immediately with running status", assignText.includes("status: running"), taskId);
+  check(
+    "host-runtime assign waits for human approval",
+    assignText.includes("tier: privileged") &&
+      assignText.includes("approval: pending") &&
+      assignText.includes(`taskrunner approve ${taskId}`),
+    taskId,
+  );
+  const early = await client.callTool({
+    name: "continue-task",
+    arguments: { task_id: taskId, prompt: "too soon" },
+  });
+  check(
+    "continue-task before approval returns approval_required",
+    text(early).startsWith("error approval_required:"),
+  );
+
+  // 2b. taskrunner deny blocks a task permanently.
+  const denyAssign = await client.callTool({
+    name: "assign-task",
+    arguments: { project: repo, worker: "codex", prompt: "should never run" },
+  });
+  const denyId = /task: (task_\w+)/.exec(text(denyAssign))?.[1] ?? "";
+  const denyOut = spawnSync(process.execPath, [CLI, "deny", denyId, "--state-root", STATE], {
+    encoding: "utf8",
+  });
+  const deniedCont = await client.callTool({
+    name: "continue-task",
+    arguments: { task_id: denyId, prompt: "please?" },
+  });
+  check(
+    "taskrunner deny blocks the task from running",
+    denyOut.status === 0 && text(deniedCont).startsWith("error policy_denied:"),
+    denyOut.stdout.trim() || denyOut.stderr.trim(),
+  );
+
+  // 2c. taskrunner approve starts the waiting first turn.
+  const approveOut = approve(taskId);
+  check(
+    "taskrunner approve starts the waiting turn",
+    approveOut.status === 0 && approveOut.stdout.includes("approved"),
+    approveOut.stdout.trim() || approveOut.stderr.trim(),
+  );
 
   // 3. lookup until completed.
   let status = "";
@@ -121,6 +169,7 @@ async function main(): Promise<void> {
     arguments: { project: repo, worker: "codex", prompt: "hang around" },
   });
   const hangId = /task: (task_\w+)/.exec(text(hang))?.[1] ?? "";
+  approve(hangId); // starts the hanging turn
   const conflict = await client.callTool({
     name: "continue-task",
     arguments: { task_id: hangId, prompt: "more" },
@@ -138,6 +187,7 @@ async function main(): Promise<void> {
     arguments: { project: repo, worker: "codex", prompt: "hang two" },
   });
   const hang2Id = /task: (task_\w+)/.exec(text(hang2))?.[1] ?? "";
+  approve(hang2Id); // starts the hanging turn
   const daemonPid = Number(fs.readFileSync(join(STATE, "runtime/daemon.pid"), "utf8"));
   process.kill(daemonPid, "SIGKILL");
   await sleep(300);

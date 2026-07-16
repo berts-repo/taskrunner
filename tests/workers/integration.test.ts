@@ -8,6 +8,7 @@ import { ArtifactStore } from "../../src/storage/artifacts.js";
 import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
+import { HostRunner } from "../../src/workers/runner.js";
 import { WorktreeWorkspaces } from "../../src/workspace/worktree.js";
 import { tempDir } from "../helpers.js";
 import { writeFakeCodex } from "./fake-codex.js";
@@ -36,12 +37,14 @@ function makeStack(codexCommand: string) {
   };
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const workspacesDir = join(root, "workspaces");
+  const worktrees = new WorktreeWorkspaces(workspacesDir, artifacts, record);
   const scheduler = new Scheduler({
     config: parseConfig({}),
     index,
     record,
-    harnesses: new Map([["codex", new CodexHarness(codexCommand)]]),
-    workspaces: new WorktreeWorkspaces(workspacesDir, artifacts, record),
+    harnesses: new Map([["codex", new CodexHarness()]]),
+    workspaces: () => worktrees,
+    makeRunner: (ctx) => new HostRunner(ctx.workspaceDir, codexCommand),
     artifacts,
   });
   return { scheduler, index, workspacesDir };

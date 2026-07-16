@@ -1,15 +1,15 @@
-import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { TurnRequest, TurnResult, WorkerHarness } from "./harness.js";
 
 // Codex worker harness over the spike-proven control surface
 // (docs/specs/BACKEND_SPIKE.md):
-//   start:  codex -a never -s workspace-write exec --json -C <workspace> <prompt>
-//   resume: codex -a never -s workspace-write exec resume --json <thread_id> <prompt>
-// Events are one JSON object per stdout line. The parser is deliberately
-// tolerant of shape differences across codex versions: every line becomes an
-// audit event, and only thread id, agent messages, file changes, and usage
-// are interpreted.
+//   start:  codex -a never -s <sandbox> exec --json -C <workspace> <prompt>
+//   resume: codex -a never -s <sandbox> exec resume --json <thread_id> <prompt>
+// On the host, codex's own workspace-write sandbox is the boundary. In
+// Docker the container plus egress proxy are the boundary, and codex's
+// sandbox (Landlock) is unavailable inside containers, so the CLI sandbox is
+// disabled there. Events are one JSON object per stdout line; the parser is
+// deliberately tolerant of shape differences across codex versions.
 
 interface CodexLine {
   [key: string]: unknown;
@@ -51,22 +51,20 @@ function extractChangedFiles(obj: CodexLine, into: Set<string>): void {
 export class CodexHarness implements WorkerHarness {
   readonly name = "codex";
 
-  constructor(private readonly command: string = "codex") {}
-
-  runTurn(request: TurnRequest): Promise<TurnResult> {
-    const args = ["-a", "never", "-s", "workspace-write", "exec"];
+  async runTurn(request: TurnRequest): Promise<TurnResult> {
+    const sandbox = request.runner.kind === "docker" ? "danger-full-access" : "workspace-write";
+    const args = ["codex", "-a", "never", "-s", sandbox, "exec"];
     if (request.nativeSessionId) {
       args.push("resume", "--json", request.nativeSessionId, request.prompt);
     } else {
-      args.push("--json", "-C", request.workspaceDir, request.prompt);
+      args.push("--json", "-C", request.runner.workspacePath, request.prompt);
     }
 
-    return new Promise<TurnResult>((resolve, reject) => {
-      const child = spawn(this.command, args, {
-        cwd: request.workspaceDir,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+    // ToolErrors from runner preflight (docker down, image or auth volume
+    // missing) propagate with their error codes intact.
+    const worker = await request.runner.start({ argv: args });
 
+    return new Promise<TurnResult>((resolve, reject) => {
       let threadId: string | undefined = request.nativeSessionId;
       let lastAgentMessage: string | undefined;
       let usage: unknown;
@@ -74,14 +72,10 @@ export class CodexHarness implements WorkerHarness {
       let stderrTail = "";
       let settled = false;
 
-      const onAbort = () => {
-        child.kill("SIGTERM");
-        const hardKill = setTimeout(() => child.kill("SIGKILL"), 2000);
-        hardKill.unref();
-      };
+      const onAbort = () => worker.kill();
       request.signal.addEventListener("abort", onAbort, { once: true });
 
-      const rl = createInterface({ input: child.stdout });
+      const rl = createInterface({ input: worker.stdout });
       rl.on("line", (line) => {
         if (line.trim() === "") return;
         let obj: CodexLine;
@@ -103,7 +97,7 @@ export class CodexHarness implements WorkerHarness {
         if (kind === "turn.completed" && obj["usage"] !== undefined) usage = obj["usage"];
       });
 
-      child.stderr.on("data", (chunk: Buffer) => {
+      worker.stderr.on("data", (chunk: Buffer) => {
         stderrTail = (stderrTail + chunk.toString("utf8")).slice(-4096);
       });
 
@@ -114,34 +108,35 @@ export class CodexHarness implements WorkerHarness {
         fn();
       };
 
-      child.on("error", (err) =>
-        settle(() => reject(new Error(`failed to start codex worker: ${err.message}`))),
-      );
-      child.on("close", (code) => {
-        rl.close();
-        if (request.signal.aborted) {
-          settle(() => reject(new Error("codex worker terminated by abort")));
-          return;
-        }
-        if (code !== 0) {
-          const detail = stderrTail.trim();
+      worker.exited
+        .then((code) => {
+          rl.close();
+          if (request.signal.aborted) {
+            settle(() => reject(new Error("codex worker terminated by abort")));
+            return;
+          }
+          if (code !== 0) {
+            const detail = stderrTail.trim();
+            settle(() =>
+              reject(
+                new Error(`codex exited with code ${code}${detail ? `: ${detail}` : ""}`),
+              ),
+            );
+            return;
+          }
           settle(() =>
-            reject(
-              new Error(`codex exited with code ${code}${detail ? `: ${detail}` : ""}`),
-            ),
+            resolve({
+              response: lastAgentMessage ?? "",
+              ...(threadId ? { nativeSessionId: threadId } : {}),
+              changedFiles: [...changedFiles],
+              ...(usage !== undefined ? { usage } : {}),
+              exitCode: code,
+            }),
           );
-          return;
-        }
-        settle(() =>
-          resolve({
-            response: lastAgentMessage ?? "",
-            ...(threadId ? { nativeSessionId: threadId } : {}),
-            changedFiles: [...changedFiles],
-            ...(usage !== undefined ? { usage } : {}),
-            exitCode: code,
-          }),
+        })
+        .catch((err: Error) =>
+          settle(() => reject(new Error(`failed to start codex worker: ${err.message}`))),
         );
-      });
     });
   }
 }

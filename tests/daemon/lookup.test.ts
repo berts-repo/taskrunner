@@ -9,6 +9,7 @@ import { ArtifactStore } from "../../src/storage/artifacts.js";
 import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
+import { HostRunner } from "../../src/workers/runner.js";
 import { WorktreeWorkspaces } from "../../src/workspace/worktree.js";
 import { tempDir } from "../helpers.js";
 import { writeFakeCodex } from "../workers/fake-codex.js";
@@ -41,12 +42,15 @@ beforeAll(async () => {
     return event;
   };
   const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const worktrees = new WorktreeWorkspaces(join(root, "workspaces"), artifacts, record);
+  const fakeCodex = writeFakeCodex();
   const scheduler = new Scheduler({
     config: parseConfig({}),
     index,
     record,
-    harnesses: new Map([["codex", new CodexHarness(writeFakeCodex())]]),
-    workspaces: new WorktreeWorkspaces(join(root, "workspaces"), artifacts, record),
+    harnesses: new Map([["codex", new CodexHarness()]]),
+    workspaces: () => worktrees,
+    makeRunner: (ctx) => new HostRunner(ctx.workspaceDir, fakeCodex),
     artifacts,
   });
   deps = { index, artifacts };

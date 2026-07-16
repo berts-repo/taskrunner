@@ -8,6 +8,7 @@ import { ArtifactStore } from "../../src/storage/artifacts.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { FakeHarness } from "../../src/workers/fake.js";
+import { HostRunner } from "../../src/workers/runner.js";
 import { tempDir } from "../helpers.js";
 
 function makeScheduler(configOverrides: object = {}) {
@@ -20,12 +21,15 @@ function makeScheduler(configOverrides: object = {}) {
     index.apply(event);
     return event;
   };
+  const workspaces = new ProjectRootWorkspaces();
   const scheduler = new Scheduler({
     config: parseConfig(configOverrides),
     index,
     record,
     harnesses: new Map([["fake", new FakeHarness()]]),
-    workspaces: new ProjectRootWorkspaces(),
+    workspaces: () => workspaces,
+    // FakeHarness never spawns a process, so a host runner suffices.
+    makeRunner: (ctx) => new HostRunner(ctx.workspaceDir),
     artifacts: new ArtifactStore(join(root, "artifacts")),
   });
   const project = tempDir("proj");
@@ -216,5 +220,97 @@ describe("Scheduler async contract", () => {
     await scheduler.assignTask({ project, worker: "fake", prompt: "b", wait: true });
     const { n } = index.db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number };
     expect(n).toBe(1);
+  });
+});
+
+describe("Risk tiers and approvals", () => {
+  it("records workspace-write tier and runtime on plain tasks", async () => {
+    const { scheduler, project } = makeScheduler();
+    const outcome = await scheduler.assignTask({
+      project,
+      worker: "fake",
+      prompt: "quick",
+      wait: true,
+    });
+    expect(outcome.tier).toBe("workspace-write");
+    expect(outcome.approval_state).toBe("none");
+  });
+
+  it("networked without user_approved is rejected with approval_required", async () => {
+    const { scheduler, project } = makeScheduler();
+    await expect(
+      scheduler.assignTask({
+        project,
+        worker: "fake",
+        prompt: "install deps",
+        allowDomains: ["registry.npmjs.org"],
+      }),
+    ).rejects.toMatchObject({ code: "approval_required" });
+  });
+
+  it("networked with user_approved runs and records an agent-relayed approval", async () => {
+    const { scheduler, project, logPath } = makeScheduler();
+    const outcome = await scheduler.assignTask({
+      project,
+      worker: "fake",
+      prompt: "install deps",
+      allowDomains: ["registry.npmjs.org"],
+      userApproved: true,
+      wait: true,
+    });
+    expect(outcome.tier).toBe("networked");
+    expect(outcome.approval_state).toBe("approved");
+    expect(outcome.status).toBe("completed");
+    const approval = readEvents(logPath).find((e) => e.type === "approval.recorded") as any;
+    expect(approval.via).toBe("agent");
+    expect(approval.domains).toEqual(["registry.npmjs.org"]);
+  });
+
+  it("host runtime is privileged: waits, then approve starts the turn", async () => {
+    const { scheduler, project, logPath } = makeScheduler();
+    const outcome = await scheduler.assignTask({
+      project,
+      worker: "fake",
+      prompt: "host work",
+      runtime: "host",
+    });
+    expect(outcome.tier).toBe("privileged");
+    expect(outcome.approval_state).toBe("pending");
+    expect(outcome.turn_id).toBeNull();
+    expect(outcome.status).toBe("created");
+    // No turn may run before the human decision.
+    await expect(
+      scheduler.continueTask({ task_id: outcome.task_id, prompt: "more" }),
+    ).rejects.toMatchObject({ code: "approval_required" });
+
+    const approved = await scheduler.approveTask(outcome.task_id);
+    expect(approved.approval_state).toBe("approved");
+    expect(approved.turn_id).toMatch(/^turn_/);
+    expect(await waitForTerminal(scheduler, outcome.task_id)).toBe("completed");
+    // The waiting prompt (recorded by approval.requested) started the turn.
+    const final = scheduler.outcome(outcome.task_id);
+    expect(final.summary).toContain("host work");
+    const approval = readEvents(logPath).find((e) => e.type === "approval.recorded") as any;
+    expect(approval.via).toBe("human");
+  });
+
+  it("deny blocks the task from ever running", async () => {
+    const { scheduler, project } = makeScheduler();
+    const outcome = await scheduler.assignTask({
+      project,
+      worker: "fake",
+      prompt: "host work",
+      runtime: "host",
+    });
+    const denied = await scheduler.denyTask(outcome.task_id);
+    expect(denied.approval_state).toBe("denied");
+    expect(denied.turn_id).toBeNull();
+    await expect(
+      scheduler.continueTask({ task_id: outcome.task_id, prompt: "more" }),
+    ).rejects.toMatchObject({ code: "policy_denied" });
+    // Double decisions are rejected.
+    await expect(scheduler.approveTask(outcome.task_id)).rejects.toMatchObject({
+      code: "invalid_request",
+    });
   });
 });

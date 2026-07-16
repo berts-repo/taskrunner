@@ -15,6 +15,8 @@ export function renderOutcome(outcome: TurnOutcome): string {
     `status: ${outcome.status}`,
     `worker: ${outcome.worker}${outcome.worker_session_id ? ` (native session ${outcome.worker_session_id})` : ""}`,
   ];
+  if (outcome.tier) lines.push(`tier: ${outcome.tier}`);
+  if (outcome.approval_state !== "none") lines.push(`approval: ${outcome.approval_state}`);
   if (outcome.summary) lines.push("", outcome.summary);
   if (outcome.changed_files.length > 0) {
     lines.push("", "changed files:", ...outcome.changed_files.map((f) => `  ${f}`));
@@ -23,7 +25,14 @@ export function renderOutcome(outcome: TurnOutcome): string {
     lines.push("", "artifacts:", ...outcome.artifacts.map(artifactLine));
   }
   if (outcome.error) lines.push("", `error ${outcome.error.code}: ${outcome.error.message}`);
-  if (outcome.status === "running") {
+  if (outcome.approval_state === "pending") {
+    lines.push(
+      "",
+      "This task waits for a human decision. Tell the user to run:",
+      `  taskrunner approve ${outcome.task_id}`,
+      `or: taskrunner deny ${outcome.task_id}`,
+    );
+  } else if (outcome.status === "running") {
     lines.push("", "Turn is running. Use lookup-task with this task id to retrieve the result.");
   }
   return lines.join("\n");

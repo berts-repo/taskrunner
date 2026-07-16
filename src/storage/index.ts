@@ -8,7 +8,7 @@ import type { LogEvent } from "./events.js";
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE projects (
@@ -34,8 +34,22 @@ CREATE TABLE tasks (
   worker TEXT NOT NULL,
   prompt_summary TEXT NOT NULL,
   status TEXT NOT NULL,
+  tier TEXT,
+  runtime TEXT,
+  allow_domains TEXT,
+  approval_state TEXT NOT NULL DEFAULT 'none',
+  pending_prompt TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE approvals (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  decision TEXT NOT NULL,
+  via TEXT NOT NULL,
+  domains TEXT,
+  session_id TEXT,
+  ts TEXT NOT NULL
 );
 CREATE TABLE turns (
   id TEXT PRIMARY KEY,
@@ -140,16 +154,44 @@ export class StateIndex {
       case "task.created":
         db.prepare(
           `INSERT OR IGNORE INTO tasks
-             (id, project_id, session_id, worker, prompt_summary, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'created', ?, ?)`,
+             (id, project_id, session_id, worker, prompt_summary, status,
+              tier, runtime, allow_domains, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?)`,
         ).run(
           event.task_id,
           event.project_id,
           event.session_id ?? null,
           event.worker,
           event.prompt_summary,
+          event.tier ?? null,
+          event.runtime ?? null,
+          event.allow_domains ? JSON.stringify(event.allow_domains) : null,
           event.ts,
           event.ts,
+        );
+        break;
+      case "approval.requested":
+        db.prepare(
+          "UPDATE tasks SET approval_state = 'pending', pending_prompt = ?, updated_at = ? WHERE id = ?",
+        ).run(event.prompt, event.ts, event.task_id);
+        break;
+      case "approval.recorded":
+        db.prepare(
+          `INSERT OR IGNORE INTO approvals (id, task_id, decision, via, domains, session_id, ts)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          event.approval_id,
+          event.task_id,
+          event.decision,
+          event.via,
+          event.domains ? JSON.stringify(event.domains) : null,
+          event.session_id ?? null,
+          event.ts,
+        );
+        db.prepare("UPDATE tasks SET approval_state = ?, updated_at = ? WHERE id = ?").run(
+          event.decision,
+          event.ts,
+          event.task_id,
         );
         break;
       case "turn.started": {
@@ -160,6 +202,8 @@ export class StateIndex {
           `INSERT OR IGNORE INTO turns (id, task_id, idx, prompt, status, started_at)
            VALUES (?, ?, ?, ?, 'running', ?)`,
         ).run(event.turn_id, event.task_id, n, event.prompt, event.ts);
+        // A pending first-turn prompt is consumed by its turn starting.
+        db.prepare("UPDATE tasks SET pending_prompt = NULL WHERE id = ?").run(event.task_id);
         this.setTaskStatus(event.task_id, "running", event.ts);
         break;
       }
