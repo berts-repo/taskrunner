@@ -23,7 +23,10 @@ const net = require("node:net");
 // PORT=0 lets tests bind an ephemeral port; the container always uses 3128.
 const PORT = process.env.PORT === undefined ? 3128 : Number(process.env.PORT);
 
-/** @type {string[]} entries like "api.openai.com", "*.chatgpt.com", "host.docker.internal:11434" */
+/** @type {string[]} entries like "api.openai.com", "*.chatgpt.com", "host.docker.internal:11434".
+ * A bare "*" allows every host, but only on the web ports (80/443 — same rule
+ * as any portless entry) and never toward special-use addresses: full-internet
+ * access still keeps loopback, the LAN, and the Docker host off limits. */
 const allowed = JSON.parse(process.env.TASKRUNNER_ALLOWED_DOMAINS || "[]");
 
 // Names Docker's embedded DNS resolves to the host gateway; a task cannot
@@ -49,6 +52,7 @@ function entryMatches(entry, host, port) {
   // Portless entries cover only the standard web ports; anything else must
   // be spelled out, so an approved domain is not an open door to any port.
   if (entryPort === null ? port !== 80 && port !== 443 : entryPort !== port) return false;
+  if (entryHost === "*") return true;
   if (entryHost.startsWith("*.")) {
     return host.endsWith(entryHost.slice(1)); // ".domain" suffix, subdomains only
   }

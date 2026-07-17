@@ -63,9 +63,12 @@ afterAll(async () => {
  * when the proxy drops the socket without replying (allowed host whose
  * upstream connection failed).
  */
-function connectStatus(target: string): Promise<{ status: string; socket: net.Socket }> {
+function connectStatus(
+  target: string,
+  port: number = proxyPort,
+): Promise<{ status: string; socket: net.Socket }> {
   return new Promise((resolve, reject) => {
-    const socket = net.connect(proxyPort, "127.0.0.1", () => {
+    const socket = net.connect(port, "127.0.0.1", () => {
       socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
     });
     let settled = false;
@@ -82,9 +85,12 @@ function connectStatus(target: string): Promise<{ status: string; socket: net.So
   });
 }
 
-async function waitForDecision(host: string): Promise<{ egress: string; port: number }> {
+async function waitForDecision(
+  host: string,
+  log: typeof decisions = decisions,
+): Promise<{ egress: string; port: number; reason?: string }> {
   for (let i = 0; i < 100; i++) {
-    const hit = decisions.find((d) => d.host === host);
+    const hit = log.find((d) => d.host === host);
     if (hit) return hit;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -188,6 +194,77 @@ describe("egress proxy", () => {
     const { status, socket } = await connectStatus(`127.0.0.1:${upstreamPort}`);
     expect(status).toBe("HTTP/1.1 200 Connection Established");
     socket.destroy();
+  });
+
+  describe("with a bare * allowlist entry", () => {
+    let wildcardProxy: ChildProcess;
+    let wildcardPort: number;
+    const wildcardDecisions: typeof decisions = [];
+
+    beforeAll(async () => {
+      wildcardProxy = spawn(process.execPath, [SERVER_JS], {
+        env: { ...process.env, PORT: "0", TASKRUNNER_ALLOWED_DOMAINS: JSON.stringify(["*"]) },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const rl = createInterface({ input: wildcardProxy.stdout as Readable });
+      wildcardPort = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("wildcard proxy did not start")), 5000);
+        rl.on("line", (line) => {
+          const obj = JSON.parse(line) as Record<string, unknown>;
+          if (obj["proxy"] === "listening") {
+            clearTimeout(timer);
+            resolve(Number(obj["port"]));
+          } else if (typeof obj["egress"] === "string") {
+            wildcardDecisions.push(obj as (typeof decisions)[number]);
+          }
+        });
+      });
+    });
+
+    afterAll(() => {
+      wildcardProxy.kill("SIGTERM");
+    });
+
+    it("allows any public hostname on the web ports", async () => {
+      // Policy allows it; the upstream connect fails (no such DNS name),
+      // which surfaces as a dropped socket, not a 403.
+      const { socket } = await connectStatus("anything.example:443", wildcardPort);
+      socket.destroy();
+      expect(await waitForDecision("anything.example", wildcardDecisions)).toMatchObject({
+        egress: "allowed",
+      });
+    });
+
+    it("still limits the portless * to ports 80 and 443", async () => {
+      const { status, socket } = await connectStatus("odd-port.example:8080", wildcardPort);
+      expect(status).toBe("HTTP/1.1 403 Forbidden");
+      socket.destroy();
+      expect(await waitForDecision("odd-port.example", wildcardDecisions)).toMatchObject({
+        egress: "refused",
+        port: 8080,
+        reason: "allowlist",
+      });
+    });
+
+    it("still refuses names resolving to special-use addresses", async () => {
+      const { status, socket } = await connectStatus("localhost:443", wildcardPort);
+      expect(status).toBe("HTTP/1.1 403 Forbidden");
+      socket.destroy();
+      expect(await waitForDecision("localhost", wildcardDecisions)).toMatchObject({
+        egress: "refused",
+        reason: "special-address",
+      });
+    });
+
+    it("still refuses special-use IP literals", async () => {
+      const { status, socket } = await connectStatus("192.168.1.1:443", wildcardPort);
+      expect(status).toBe("HTTP/1.1 403 Forbidden");
+      socket.destroy();
+      expect(await waitForDecision("192.168.1.1", wildcardDecisions)).toMatchObject({
+        egress: "refused",
+        reason: "special-address",
+      });
+    });
   });
 
   it("proxies plain HTTP absolute-form requests through the allowlist", async () => {
