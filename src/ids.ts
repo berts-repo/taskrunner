@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 
-// Approved record ID shape: prefixed lowercase ULIDs (docs/specs/NAMING.md).
+// Record IDs are prefixed lowercase ULIDs.
 export type IdPrefix =
   | "proj"
   | "sess"

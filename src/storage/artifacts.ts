@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 
 // Content-addressed artifact store under <state root>/artifacts/. Files are
-// immutable once stored (PLAN § Database schema); metadata and links live in
+// immutable once stored; metadata and links live in
 // the event log and index, not here.
 
 export interface StoredArtifact {

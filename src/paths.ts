@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-// Approved global state root layout (docs/specs/NAMING.md).
+// Global state root layout (default ~/.taskrunner/).
 export interface StatePaths {
   root: string;
   eventsLog: string;

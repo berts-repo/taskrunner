@@ -13,7 +13,7 @@ export interface ProjectRef {
 /**
  * Resolves a caller-supplied path to a canonical project record, creating the
  * project on first sight. Projects are keyed by normalized (real) root path;
- * other observed paths become aliases (PLAN § Database schema).
+ * other observed paths become aliases.
  */
 export function resolveProject(
   index: StateIndex,

@@ -1,8 +1,7 @@
 import { createInterface } from "node:readline";
 import type { TurnRequest, TurnResult, WorkerHarness } from "./harness.js";
 
-// Codex worker harness over the live-verified control surface
-// (PLAN § Worker Harness):
+// Codex worker harness over the live-verified control surface:
 //   start:  codex -a never -s <sandbox> exec --json -C <workspace> <prompt>
 //   resume: codex -a never -s <sandbox> exec resume --json <thread_id> <prompt>
 // On the host, codex's own workspace-write sandbox is the boundary. In

@@ -5,8 +5,8 @@ import { ToolError } from "../domain/errors.js";
 
 // Per-turn execution runtime for worker processes. Harnesses build a worker
 // argv (codex/claude CLI invocations) and the runner runs it inside a Docker
-// container with the workspace mounted at /workspace behind the egress proxy
-// (PLAN § Workspace And Isolation). `kind: "host"` exists only for the local
+// container with the workspace mounted at /workspace behind the egress proxy.
+// `kind: "host"` exists only for the local
 // test runner that exercises harnesses without Docker.
 
 export interface WorkerSpawnSpec {
@@ -116,7 +116,7 @@ function docker(
  * Runs the worker in a container on an internal Docker network (no route to
  * the outside). A dual-homed egress proxy sidecar is the only way out and
  * forwards only allowlisted domains; every decision it makes is surfaced via
- * onEgress for the audit log (PLAN § Container posture).
+ * onEgress for the audit log.
  */
 export class DockerRunner implements WorkerRunner {
   readonly kind = "docker";

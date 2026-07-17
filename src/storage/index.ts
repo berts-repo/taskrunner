@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { LogEvent } from "./events.js";
 
-// Derived, rebuildable index over the event log (PLAN § Database schema,
-// § Storage write path). Delete-and-rebuild is the universal recovery path,
+// Derived, rebuildable index over the event log.
+// Delete-and-rebuild is the universal recovery path,
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 

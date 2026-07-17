@@ -15,7 +15,7 @@ import type { StateIndex } from "../storage/index.js";
 import type { WorkerHarness } from "../workers/harness.js";
 import type { WorkerRunner } from "../workers/runner.js";
 
-/** Result contract shared by assign-task and continue-task (PLAN § MCP tool schemas). */
+/** Result contract shared by assign-task and continue-task. */
 export interface TurnOutcome {
   task_id: string;
   turn_id: string | null;
@@ -80,8 +80,7 @@ interface RunningTurn {
 }
 
 /**
- * Turn lifecycle owner (PLAN § Async delegation contract, § Risk tiers and
- * default policy): assign/continue return immediately with a running status
+ * Turn lifecycle owner: assign/continue return immediately with a running status
  * unless `wait`; one running turn per task; every turn has a timeout;
  * networked tasks need a relayed user approval before they run.
  */
@@ -287,8 +286,8 @@ export class Scheduler {
         prompt,
         ...(previousNativeId ? { nativeSessionId: previousNativeId } : {}),
         signal: entry.controller.signal,
-        // Streamed into the audit log as they arrive, not buffered
-        // (PLAN § Storage write path).
+        // Streamed into the audit log as they arrive, not buffered, so a
+        // crashed turn keeps its partial trail.
         onEvent: (event) => {
           rawEventLines.push(JSON.stringify(event));
           record({
@@ -354,7 +353,7 @@ export class Scheduler {
       clearTimeout(timer);
       await runner?.dispose().catch(() => {});
       // Bulky raw event streams are end-of-turn copy-out; the per-event audit
-      // records above are already durable (PLAN § Storage write path).
+      // records above are already durable.
       if (rawEventLines.length > 0) {
         const stored = this.deps.artifacts.store(rawEventLines.join("\n") + "\n");
         const artifactId = newId("art");

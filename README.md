@@ -32,21 +32,6 @@ over MCP.
   events link back to it.
 - **Artifact**: stored output such as diffs and raw worker event streams.
 
-## Project Documents
-
-- [PLAN.md](./docs/specs/PLAN.md): system design and decision record.
-- [NAMING.md](./docs/specs/NAMING.md): approved and retired naming register.
-
-## Status
-
-The product is feature-complete: the on-demand daemon, the stdio MCP shim
-with auto-start, the four core MCP tools with the async delegation contract,
-the JSONL event log with a rebuildable SQLite index, trace-capable lookup,
-and Docker workers (codex and claude) in task-local clones behind a
-filtering egress proxy. New workers land as config entries via the pluggable
-`harness` mechanism. Cut scope is recorded in `docs/specs/PLAN.md` § Cut
-scope.
-
 ## Quick Start
 
 ```sh

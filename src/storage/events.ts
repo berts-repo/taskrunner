@@ -4,8 +4,8 @@ import { z } from "zod";
 import { newId } from "../ids.js";
 
 // Every durable record is one JSONL line appended to the event log first;
-// SQLite is a derived index folded from these events (PLAN § Storage write
-// path). All timestamps that reach the index come from event `ts` fields so
+// SQLite is a derived index folded from these events.
+// All timestamps that reach the index come from event `ts` fields so
 // rebuilds are deterministic.
 
 const projectCreated = z.object({
@@ -39,7 +39,7 @@ const taskCreated = z.object({
   session_id: z.string().optional(),
   worker: z.string(),
   prompt_summary: z.string(),
-  // Policy fields; absent on Phase 1 records (docker/workspace-write
+  // Policy fields; absent on the earliest records (docker/workspace-write
   // equivalents did not exist yet, so readers must not assume defaults).
   tier: z.string().optional(),
   // Legacy (removed host-run flow): never emitted anymore, kept so old logs
@@ -170,7 +170,7 @@ export function parseEventLine(line: string): LogEvent {
 /**
  * Reads all valid events. Stops silently at the first unparseable line: the
  * log is append-only, so anything after a torn line is a torn tail from a
- * crash mid-append (PLAN § Storage write path).
+ * crash mid-append.
  */
 export function readEvents(path: string): LogEvent[] {
   let content: string;

@@ -1,8 +1,7 @@
 import type { TurnOutcome } from "./daemon/scheduler.js";
 import type { ArtifactHandle } from "./domain/tasks.js";
 
-// Tool responses are compact readable text with handles, not raw JSON blobs
-// (PLAN § MCP Tool Surface).
+// Tool responses are compact readable text with handles, not raw JSON blobs.
 
 function artifactLine(a: ArtifactHandle): string {
   return `  ${a.artifact_id}  ${a.kind}  ${a.label} (${a.media_type}, ${a.size_bytes} bytes)`;

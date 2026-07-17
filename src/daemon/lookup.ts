@@ -12,8 +12,7 @@ import {
 import type { ArtifactStore } from "../storage/artifacts.js";
 import type { StateIndex } from "../storage/index.js";
 
-// lookup-task semantics (PLAN § MCP tool schemas, § MCP Tool Surface history
-// presentation rules): compact summaries by default; expansion blocks only for requested
+// lookup-task semantics: compact summaries by default; expansion blocks only for requested
 // include fields; history as paired exchanges, never loose audit rows; trace
 // replays inputs, observable worker activity, and outputs per in-scope turn.
 

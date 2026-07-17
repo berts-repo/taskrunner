@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
 
-// Global TOML config at <state root>/config.toml. Keys are user-facing and
-// tracked in docs/specs/NAMING.md; keep this schema minimal.
+// Global TOML config at <state root>/config.toml. Keys are user-facing;
+// keep this schema minimal.
 
 const workerSchema = z.object({
   /**

@@ -1,4 +1,4 @@
-// Error codes from PLAN § MCP tool schemas.
+// Error codes surfaced by the MCP tools.
 export type ErrorCode =
   | "invalid_request"
   | "not_found"

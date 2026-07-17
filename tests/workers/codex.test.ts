@@ -17,7 +17,7 @@ function fakeRunner(workspace: string): LocalRunner {
 }
 
 describe("CodexHarness", () => {
-  it("parses spike-shaped JSONL: thread id, events, response, changed files, usage", async () => {
+  it("parses codex exec JSONL: thread id, events, response, changed files, usage", async () => {
     const harness = new CodexHarness();
     const workspace = tempDir("codex-ws");
     const { events, onEvent } = collect();

@@ -1,4 +1,4 @@
-// Shared worker harness contract (PLAN § Worker Harness): start a turn,
+// Shared worker harness contract: start a turn,
 // resume by worker-native session ID, stream structured events, capture the
 // final response, exit status, and changed files.
 

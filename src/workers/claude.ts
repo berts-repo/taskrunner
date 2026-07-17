@@ -1,8 +1,7 @@
 import { createInterface } from "node:readline";
 import type { TurnRequest, TurnResult, WorkerHarness } from "./harness.js";
 
-// Claude Code worker harness over the live-verified control surface
-// (PLAN § Worker Harness):
+// Claude Code worker harness over the live-verified control surface:
 //   start:  claude --print --output-format stream-json --verbose <perm> <prompt>
 //   resume: same, plus --resume <session_id>
 // Non-interactive runs MUST set a permission flag or they hang on permission

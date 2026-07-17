@@ -7,8 +7,8 @@ import type { EventBody, LogEvent } from "../storage/events.js";
 import { captureDiffArtifact, collectGitChanges, git } from "./git.js";
 
 /**
- * Task-local clone workspaces for Docker workers (PLAN § Workspace And
- * Isolation): a worktree's `.git` file points back into the main repository,
+ * Task-local clone workspaces for Docker workers: a worktree's `.git` file
+ * points back into the main repository,
  * so mounting one into a container either breaks git or exposes the host
  * `.git`. A clone is fully self-contained; the container mounts only the
  * clone directory.

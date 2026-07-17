@@ -25,7 +25,7 @@ export interface DaemonOptions {
   makeRunner?: (ctx: RunnerContext) => WorkerRunner;
 }
 
-// Workers are pluggable (PLAN § Worker Harness): a worker is a config entry,
+// Workers are pluggable: a worker is a config entry,
 // and only this table knows which harness code exists. `harness` in config
 // selects the loop; the worker's name stays the user's to choose.
 const HARNESS_KINDS: Record<string, (cfg: WorkerConfig) => WorkerHarness> = {
@@ -39,7 +39,7 @@ const HARNESS_KINDS: Record<string, (cfg: WorkerConfig) => WorkerHarness> = {
 
 /** Container mounts for each harness kind's auth material. */
 const AUTH_MOUNTS: Record<string, AuthMount[]> = {
-  // codex keeps everything under ~/.codex (PLAN § Credentials).
+  // codex keeps everything under ~/.codex.
   codex: [{ containerPath: "/home/worker/.codex" }],
   // claude spreads login state across the home directory, but only these two
   // paths carry it: ~/.claude (credentials, sessions, settings) and
@@ -85,8 +85,8 @@ interface McpSession {
 }
 
 /**
- * One daemon per state root owns the event log, index, and worker lifecycle
- * (PLAN § Process model). Single-writer is enforced by construction: all
+ * One daemon per state root owns the event log, index, and worker lifecycle.
+ * Single-writer is enforced by construction: all
  * durable writes go through `record`, and the lock file keeps a second
  * daemon out.
  */
@@ -123,13 +123,12 @@ export class Daemon {
       const artifacts = new ArtifactStore(paths.artifactsDir);
       const server = http.createServer();
       let record!: (body: EventBody) => LogEvent;
-      // Turns run in self-contained clones the container can mount safely
-      // (PLAN § Workspace And Isolation).
+      // Turns run in self-contained clones the container can mount safely.
       const clones = new CloneWorkspaces(paths.workspacesDir, artifacts, (b) => record(b));
       const makeRunner = (ctx: RunnerContext): WorkerRunner => {
         const cfg = workerConfig(config, ctx.worker);
-        // Mount only the worker's own auth material, never broad host state
-        // (PLAN § Credentials). Mounts and image fallbacks key on the harness
+        // Mount only the worker's own auth material, never broad host state.
+        // Mounts and image fallbacks key on the harness
         // kind, so config-only workers inherit their loop's layout.
         const kind = cfg.harness ?? ctx.worker;
         // A missing image surfaces from the runner's preflight at start time,

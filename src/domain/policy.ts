@@ -1,4 +1,4 @@
-// Risk tiers and default policy (PLAN § Risk tiers and default policy).
+// Risk tiers and default policy.
 // Workers always run in Docker; a delegated task's tier follows from what it
 // asks for:
 //   workspace-write — isolated edits in the task workspace; the delegation

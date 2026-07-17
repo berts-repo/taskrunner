@@ -59,7 +59,7 @@ export function evt(body: EventBody): LogEvent {
   };
 }
 
-/** A realistic Phase 1 sequence: one project, session, task, and completed turn. */
+/** A realistic event sequence: one project, session, task, and completed turn. */
 export function sampleSequence(): LogEvent[] {
   return [
     evt({ type: "project.created", project_id: "proj_a", root: "/repo" }),

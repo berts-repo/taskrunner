@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { Agent, fetch as undiciFetch } from "undici";
 import type { StatePaths } from "../paths.js";
 
-// Thin stdio shim (PLAN § Process model): bridges MCP JSON-RPC between the
+// Thin stdio shim: bridges MCP JSON-RPC between the
 // client's stdio and the daemon's streamable HTTP endpoint on the unix
 // socket, starting the daemon on demand. It never interprets messages.
 
