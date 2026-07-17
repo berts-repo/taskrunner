@@ -5,10 +5,9 @@ import { tempDir } from "../helpers.js";
 /**
  * Writes an executable node script that mimics `claude --print
  * --output-format stream-json --verbose` closely enough for harness tests:
- * the line shapes recorded in docs/specs/BACKEND_SPIKE.md § Claude Docker
- * Retest Result (system init with session_id, assistant tool_use edits, a
- * final result line), resume support, and failure/hang modes driven by the
- * prompt text.
+ * the line shapes observed live (system init with session_id, assistant
+ * tool_use edits, a final result line), resume support, and failure/hang
+ * modes driven by the prompt text.
  */
 export function writeFakeClaude(): string {
   const script = `#!/usr/bin/env node

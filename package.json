@@ -2,7 +2,7 @@
   "name": "taskrunner",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first MCP server for durable sessions, audit, memory, and delegated worker execution.",
+  "description": "Local-first MCP delegation broker: hand tasks to coding-agent workers in isolated Docker containers, with a durable audit trail.",
   "type": "module",
   "bin": {
     "taskrunner": "dist/cli.js"

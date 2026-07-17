@@ -4,9 +4,9 @@ import { tempDir } from "../helpers.js";
 
 /**
  * Writes an executable node script that mimics `codex exec --json` closely
- * enough for harness tests: JSONL events on stdout in the shapes recorded in
- * docs/specs/BACKEND_SPIKE.md, a real file edit in the workspace, resume
- * support, and failure/hang modes driven by the prompt text.
+ * enough for harness tests: JSONL events on stdout in the shapes observed
+ * live, a real file edit in the workspace, resume support, and failure/hang
+ * modes driven by the prompt text.
  */
 export function writeFakeCodex(): string {
   const script = `#!/usr/bin/env node

@@ -1,68 +1,41 @@
 # Taskrunner MCP Server
 
-Taskrunner is a local-first session, audit, and delegation layer for
-Claude Code, Codex, Gemini, and other MCP-compatible clients.
+Taskrunner is a local-first delegation broker for MCP clients. Ask your
+coding agent (Claude Code, Codex, or anything else that speaks MCP) to hand
+a task to a configured worker; the worker runs in an isolated Docker
+container over a task-local git clone, behind a filtering egress proxy, and
+every observable step lands in a durable audit trail you can query back
+over MCP.
 
-It is designed to act as:
-
-- An MCP toolbox for agents and users.
-- A durable session and audit layer for participating clients.
-- A local delegation broker for configured workers.
-- A project-scoped evidence and artifact store, queryable by external
-  assistant agents over MCP.
-
-## Goals
-
-- Keep durable sessions for participating clients.
-- Audit every prompt and response Taskrunner can observe.
-- Delegate work to configured coding-agent workers.
-- Keep active client context small through compact project-scoped records.
-- Maintain a complete audit trail for sessions, delegation, worker activity,
-  approvals, errors, artifacts, and file changes.
-- Use task-specific isolated git workspaces (task-local clones) and Docker
-  worker isolation for delegated coding.
-- Remain portable across workstations with optional client and worker
-  integrations.
+- Four core tools: `assign-task`, `continue-task`, `lookup-task`,
+  `cancel-task`.
+- Asynchronous multi-turn tasks: assign returns immediately, `lookup-task`
+  retrieves results (including paired exchanges and end-to-end traces), and
+  `continue-task` resumes the worker's native session.
+- Docker-only worker isolation: task-local clone mounted at `/workspace`,
+  internal network with no outside route, egress proxy allowlist, and
+  narrow worker-owned auth volumes — never host credentials.
+- Durable storage: append-only JSONL event log as the write path, a
+  rebuildable SQLite index, and content-addressed artifacts (worker event
+  streams, diffs).
+- Pluggable workers: a worker is a `[worker.<name>]` config entry with a
+  `harness` key — never a code change.
 
 ## Core Concepts
 
-- **Session**: durable record of participating client interaction.
-- **Task**: delegated unit of work.
+- **Task**: delegated unit of work, scoped to a project.
 - **Turn**: one interaction within a task.
 - **Worker**: execution runtime such as Codex or Claude Code.
-- **Worker harness**: integration code that starts, resumes, and records worker
-  activity.
-- **Artifact**: stored output such as logs, diffs, summaries, prompts,
-  responses, and raw worker events.
-- **Instruction**: reusable provider-neutral prompt or skill package.
-
-## Architecture Summary
-
-- Runtime: TypeScript / Node.js.
-- Storage: append-only JSONL event log as the write path, SQLite as the
-  derived, rebuildable index.
-- Execution model: single local Taskrunner daemon shared by all clients
-  through thin connection shims.
-- Durable state: hybrid global database plus project-local `.taskrunner/` state.
-- Client capture: portability-first hybrid model.
-  - Wrapper commands are the baseline.
-  - Native hooks/plugins are enhanced integrations where reliable.
-  - Log/session import is a recovery path.
-- Delegation: explicit, multi-turn, project-scoped tasks.
-- Worker isolation: Docker containers, task-specific git workspaces
-  (task-local clones), network disabled unless approved.
-- Secrets: environment variables and explicitly configured worker credentials,
-  without broad host secret inheritance.
-- Configuration: TOML, with global defaults and project overrides.
+- **Worker harness**: integration code that starts, resumes, and records
+  worker activity.
+- **Session**: durable record of an MCP client connection; tasks and audit
+  events link back to it.
+- **Artifact**: stored output such as diffs and raw worker event streams.
 
 ## Project Documents
 
-- [PLAN.md](./docs/specs/PLAN.md): holistic product and architecture plan.
-- [NAMING.md](./docs/specs/NAMING.md): approved and candidate naming register.
-- [BACKEND_SPIKE.md](./docs/specs/BACKEND_SPIKE.md): Codex and Claude worker
-  spike results.
-- [SYNC_PROPOSAL.md](./docs/specs/SYNC_PROPOSAL.md): cross-workstation sync
-  proposal (not adopted).
+- [PLAN.md](./docs/specs/PLAN.md): system design and decision record.
+- [NAMING.md](./docs/specs/NAMING.md): approved and retired naming register.
 
 ## Status
 
@@ -71,8 +44,23 @@ with auto-start, the four core MCP tools with the async delegation contract,
 the JSONL event log with a rebuildable SQLite index, trace-capable lookup,
 and Docker workers (codex and claude) in task-local clones behind a
 filtering egress proxy. New workers land as config entries via the pluggable
-`harness` mechanism. The formerly planned knowledge and sync phases, and the
-early host-run worker mode, are recorded as cut in `docs/specs/PLAN.md`.
+`harness` mechanism. Cut scope is recorded in `docs/specs/PLAN.md` § Cut
+scope.
+
+## Quick Start
+
+```sh
+npm install
+npm run build
+claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js mcp
+```
+
+The daemon starts on demand and keeps durable state under `~/.taskrunner/`.
+CLI: `taskrunner up | down | status | mcp` (`--state-root <dir>` overrides the
+state root).
+
+Tests: `npm test`. Live Codex delegation check (requires
+`codex login`): `TASKRUNNER_LIVE_CODEX=1 npx vitest run tests/workers/integration.test.ts`.
 
 ## Worker sign-in
 
@@ -123,18 +111,3 @@ Install [Ollama](https://ollama.com) on the host, `ollama pull` the model,
 and `assign-task` with `worker: "qwen"`. Trying another model is another
 config section; the audit trail records which worker (and so which model)
 produced every turn.
-
-## Quick Start
-
-```sh
-npm install
-npm run build
-claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js mcp
-```
-
-The daemon starts on demand and keeps durable state under `~/.taskrunner/`.
-CLI: `taskrunner up | down | status | mcp` (`--state-root <dir>` overrides the
-state root).
-
-Tests: `npm test`. Live Codex delegation check (requires
-`codex login`): `TASKRUNNER_LIVE_CODEX=1 npx vitest run tests/workers/integration.test.ts`.
