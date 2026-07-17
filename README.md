@@ -90,18 +90,19 @@ docker run -it --rm -v taskrunner-codex-home:/home/worker/.codex \
   taskrunner/codex-worker codex login --device-auth
 
 # Claude: the interactive login flow hands you a URL and takes a pasted
-# code. Claude spreads login state across the home directory, so its volume
-# mounts at the whole home.
+# code. Log in with the volume at the whole home; during turns the daemon
+# mounts only ~/.claude and ~/.claude.json out of it, so tasks cannot plant
+# shell rc files or other home-directory state for a later turn.
 docker run -it --rm -v taskrunner-claude-home:/home/worker \
   taskrunner/claude-worker claude /login
 ```
 
 Open the URL each flow prints, approve, and the credentials land in the
 volume. Repeat only when a worker's login expires or a new machine needs
-setting up. The mount paths must match what the daemon uses (narrow
-`~/.codex` for codex, whole home for claude): logging in at the wrong path
-buries the credentials where the worker can't see them, which surfaces as
-401 "Missing bearer" errors against `api.openai.com`.
+setting up. Log in at exactly the paths above (narrow `~/.codex` for codex,
+whole home for claude): logging in at the wrong path buries the credentials
+where the daemon's turn-time mounts can't see them, which surfaces as 401
+"Missing bearer" errors against `api.openai.com`.
 
 ## Custom and local-model workers
 

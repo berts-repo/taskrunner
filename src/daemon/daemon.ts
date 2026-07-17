@@ -12,7 +12,7 @@ import { VERSION } from "../version.js";
 import { ClaudeHarness } from "../workers/claude.js";
 import { CodexHarness } from "../workers/codex.js";
 import type { WorkerHarness } from "../workers/harness.js";
-import { DockerRunner, type WorkerRunner } from "../workers/runner.js";
+import { DockerRunner, type AuthMount, type WorkerRunner } from "../workers/runner.js";
 import { CloneWorkspaces } from "../workspace/clone.js";
 import { createMcpServer, type ToolContext } from "./mcp-server.js";
 import { Scheduler, type RunnerContext, type WorkspaceProvider } from "./scheduler.js";
@@ -37,12 +37,21 @@ const HARNESS_KINDS: Record<string, (cfg: WorkerConfig) => WorkerHarness> = {
   claude: (cfg) => new ClaudeHarness(cfg.model ? { model: cfg.model } : {}),
 };
 
-/** Container mount point for each harness kind's auth material. */
-const AUTH_MOUNTS: Record<string, string> = {
-  // codex keeps everything under ~/.codex; claude spreads login and session
-  // state across the home directory (PLAN § Credentials).
-  codex: "/home/worker/.codex",
-  claude: "/home/worker",
+/** Container mounts for each harness kind's auth material. */
+const AUTH_MOUNTS: Record<string, AuthMount[]> = {
+  // codex keeps everything under ~/.codex (PLAN § Credentials).
+  codex: [{ containerPath: "/home/worker/.codex" }],
+  // claude spreads login state across the home directory, but only these two
+  // paths carry it: ~/.claude (credentials, sessions, settings) and
+  // ~/.claude.json. Subpath mounts expose exactly those, so a task cannot
+  // persist shell rc files, ~/.config, or ~/.npmrc into the volume for a
+  // later turn to execute. The login flow still mounts the volume root at
+  // /home/worker, which keeps both paths present (see README § Worker
+  // sign-in).
+  claude: [
+    { containerPath: "/home/worker/.claude", subpath: ".claude" },
+    { containerPath: "/home/worker/.claude.json", subpath: ".claude.json" },
+  ],
 };
 
 /** Image fallback so config-only workers need no image key. */
@@ -130,7 +139,7 @@ export class Daemon {
           scopeId: ctx.turnId,
           image: cfg.image ?? DEFAULT_IMAGES[kind] ?? "",
           ...(cfg.auth_volume ? { authVolume: cfg.auth_volume } : {}),
-          ...(AUTH_MOUNTS[kind] ? { authMount: AUTH_MOUNTS[kind] as string } : {}),
+          ...(AUTH_MOUNTS[kind] ? { authMounts: AUTH_MOUNTS[kind] as AuthMount[] } : {}),
           proxyImage: config.egress.proxy_image,
           allowedDomains: ctx.allowedDomains,
           onEgress: (decision) => {
@@ -139,7 +148,11 @@ export class Daemon {
               task_id: ctx.taskId,
               turn_id: ctx.turnId,
               kind: decision.allowed ? "egress.allowed" : "egress.refused",
-              payload: { host: decision.host, port: decision.port },
+              payload: {
+                host: decision.host,
+                port: decision.port,
+                ...(decision.reason ? { reason: decision.reason } : {}),
+              },
             });
           },
         });

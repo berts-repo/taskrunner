@@ -46,7 +46,9 @@ back to API-key mode).
 4. Verify without touching the credentials (same mounts as the daemon):
    - codex: `docker run --rm -v taskrunner-codex-home:/home/worker/.codex taskrunner/codex-worker codex login status`
      → expect "Logged in using ChatGPT"
-   - claude: `docker run --rm -v taskrunner-claude-home:/home/worker alpine ls /home/worker/.claude`
+   - claude: `docker run --rm -v taskrunner-claude-home:/home/worker alpine ls -la /home/worker/.claude`
+     → expect `.credentials.json` in the listing (`-a` is required — plain
+     `ls` hides it, making a logged-in volume look logged-out)
 
 Host networking is not a fallback on this machine: Docker Desktop here does
 not forward host-network containers to the Mac's localhost (verified

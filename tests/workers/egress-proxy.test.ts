@@ -16,7 +16,7 @@ let proxy: ChildProcess;
 let proxyPort: number;
 let upstream: http.Server;
 let upstreamPort: number;
-const decisions: { egress: string; host: string; port: number }[] = [];
+const decisions: { egress: string; host: string; port: number; reason?: string }[] = [];
 
 beforeAll(async () => {
   upstream = http.createServer((_req, res) => res.end("upstream says hi"));
@@ -28,9 +28,12 @@ beforeAll(async () => {
       ...process.env,
       PORT: "0",
       TASKRUNNER_ALLOWED_DOMAINS: JSON.stringify([
-        "127.0.0.1",
+        // Loopback is reachable only because the operator pinned the exact
+        // IP literal and port; a portless "127.0.0.1" would cover 80/443 only.
+        `127.0.0.1:${upstreamPort}`,
         "*.allowed.test",
         `scoped.test:${upstreamPort}`,
+        `localhost:${upstreamPort}`,
       ]),
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -110,7 +113,34 @@ describe("egress proxy", () => {
     const { status, socket } = await connectStatus("evil.test:443");
     expect(status).toBe("HTTP/1.1 403 Forbidden");
     socket.destroy();
-    expect(await waitForDecision("evil.test")).toMatchObject({ egress: "refused", port: 443 });
+    expect(await waitForDecision("evil.test")).toMatchObject({
+      egress: "refused",
+      port: 443,
+      reason: "allowlist",
+    });
+  });
+
+  it("limits portless allowlist entries to ports 80 and 443", async () => {
+    const { status, socket } = await connectStatus("other.allowed.test:8080");
+    expect(status).toBe("HTTP/1.1 403 Forbidden");
+    socket.destroy();
+    expect(await waitForDecision("other.allowed.test")).toMatchObject({
+      egress: "refused",
+      port: 8080,
+      reason: "allowlist",
+    });
+  });
+
+  it("refuses allowlisted names that resolve to special-use addresses", async () => {
+    // localhost is on the allowlist with the right port, but it resolves to
+    // loopback — only an IP-literal entry may point at special-use space.
+    const { status, socket } = await connectStatus(`localhost:${upstreamPort}`);
+    expect(status).toBe("HTTP/1.1 403 Forbidden");
+    socket.destroy();
+    expect(await waitForDecision("localhost")).toMatchObject({
+      egress: "refused",
+      reason: "special-address",
+    });
   });
 
   it("matches *.wildcard entries against subdomains only", async () => {
@@ -135,6 +165,29 @@ describe("egress proxy", () => {
     rightPort.socket.destroy();
     const hits = decisions.filter((d) => d.host === "scoped.test");
     expect(hits.map((d) => d.egress)).toEqual(["refused", "allowed"]);
+  });
+
+  it("survives a client that resets the connection mid-request", async () => {
+    // A refused CONNECT whose client sends RST instead of FIN used to be an
+    // unhandled 'error' event that took the whole sidecar down.
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.connect(proxyPort, "127.0.0.1", () => {
+        socket.write("CONNECT evil.test:443 HTTP/1.1\r\nHost: evil.test:443\r\n\r\n");
+        setTimeout(() => {
+          socket.resetAndDestroy();
+          resolve();
+        }, 50);
+      });
+      socket.on("error", () => {});
+      socket.setTimeout(5000, () => reject(new Error("proxy did not respond")));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(proxy.exitCode).toBeNull();
+
+    // And it still serves the next request.
+    const { status, socket } = await connectStatus(`127.0.0.1:${upstreamPort}`);
+    expect(status).toBe("HTTP/1.1 200 Connection Established");
+    socket.destroy();
   });
 
   it("proxies plain HTTP absolute-form requests through the allowlist", async () => {

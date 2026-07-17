@@ -48,7 +48,9 @@ const configSchema = z.object({
           auth_volume: z.string().default("taskrunner-claude-home"),
           allowed_domains: z
             .array(z.string())
-            .default(["api.anthropic.com", "*.anthropic.com", "claude.ai"]),
+            // platform.claude.com serves the OAuth token refresh; blocking it
+            // strands the worker with 401s once its access token ages out.
+            .default(["api.anthropic.com", "*.anthropic.com", "claude.ai", "platform.claude.com"]),
         })
         .default({}),
     })

@@ -49,6 +49,16 @@ export interface EgressDecision {
   allowed: boolean;
   host: string;
   port: number;
+  /** Why the proxy refused, e.g. "allowlist" or "private-address". */
+  reason?: string;
+}
+
+export interface AuthMount {
+  /** Where the (sub)volume lands inside the container. */
+  containerPath: string;
+  /** Path inside the auth volume to mount; omitted mounts the volume root. */
+  subpath?: string;
+  readOnly?: boolean;
 }
 
 export interface DockerRunnerOptions {
@@ -59,8 +69,8 @@ export interface DockerRunnerOptions {
   image: string;
   /** Docker volume with the worker's own login, e.g. taskrunner-codex-home. */
   authVolume?: string;
-  /** Container mount point for the auth volume. */
-  authMount?: string;
+  /** Which parts of the auth volume to mount, and where. */
+  authMounts?: AuthMount[];
   proxyImage: string;
   /** Egress allowlist for this turn: worker defaults plus approved additions. */
   allowedDomains: string[];
@@ -69,6 +79,26 @@ export interface DockerRunnerOptions {
 }
 
 const PROXY_PORT = 3128;
+
+/**
+ * Builds --mount arguments for the worker's auth material. Subpath mounts
+ * expose only the login/session paths a harness actually uses, so a task
+ * cannot plant state elsewhere in the volume (shell rc files, ~/.config)
+ * for a later turn to trust. Credential files stay writable because both
+ * CLIs rotate tokens and persist native sessions in place; a task can
+ * therefore still read them — scoping that away needs a credential broker,
+ * which this layer does not attempt.
+ */
+export function authMountArgs(volume: string, mounts: AuthMount[]): string[] {
+  const args: string[] = [];
+  for (const mount of mounts) {
+    const parts = [`type=volume`, `src=${volume}`, `dst=${mount.containerPath}`];
+    if (mount.subpath) parts.push(`volume-subpath=${mount.subpath}`);
+    if (mount.readOnly) parts.push("readonly");
+    args.push("--mount", parts.join(","));
+  }
+  return args;
+}
 
 function docker(
   command: string,
@@ -136,7 +166,8 @@ export class DockerRunner implements WorkerRunner {
       "NO_PROXY=localhost,127.0.0.1",
     ];
     if (this.options.authVolume) {
-      args.push("-v", `${this.options.authVolume}:${this.options.authMount ?? "/home/worker"}`);
+      const mounts = this.options.authMounts ?? [{ containerPath: "/home/worker" }];
+      args.push(...authMountArgs(this.options.authVolume, mounts));
     }
     for (const [key, value] of Object.entries(spec.env ?? {})) {
       args.push("-e", `${key}=${value}`);
@@ -278,6 +309,7 @@ export class DockerRunner implements WorkerRunner {
             allowed: obj["egress"] === "allowed",
             host: String(obj["host"] ?? ""),
             port: Number(obj["port"] ?? 0),
+            ...(typeof obj["reason"] === "string" ? { reason: obj["reason"] } : {}),
           });
         }
       });
