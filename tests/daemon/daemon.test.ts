@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -9,7 +8,7 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { AlreadyRunningError, Daemon, type DaemonOptions } from "../../src/daemon/daemon.js";
 import { statePaths } from "../../src/paths.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
-import { LocalRunner, tempDir } from "../helpers.js";
+import { initGitRepo, LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeCodex } from "../workers/fake-codex.js";
 
 function unixFetch(socketPath: string): typeof fetch {
@@ -104,15 +103,7 @@ describe("Daemon", () => {
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "config.toml"), `[worker.configling]\nharness = "codex"\n`);
 
-    const repo = tempDir("repo");
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-    git("init", "-q");
-    git("config", "user.email", "t@example.com");
-    git("config", "user.name", "T");
-    writeFileSync(join(repo, "README.md"), "hi\n");
-    git("add", ".");
-    git("commit", "-qm", "init");
+    const repo = initGitRepo();
 
     const fakeCodex = writeFakeCodex();
     const daemon = await startDaemon(root, {

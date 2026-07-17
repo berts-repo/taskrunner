@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 
 // Record IDs are prefixed lowercase ULIDs.
-export type IdPrefix =
+type IdPrefix =
   | "proj"
   | "sess"
   | "task"

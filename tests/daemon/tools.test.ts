@@ -3,11 +3,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Agent, fetch as undiciFetch } from "undici";
 import { Daemon } from "../../src/daemon/daemon.js";
-import { ProjectRootWorkspaces } from "../../src/daemon/scheduler.js";
 import { statePaths } from "../../src/paths.js";
 import { readEvents } from "../../src/storage/events.js";
-import { FakeHarness } from "../../src/workers/fake.js";
-import { tempDir } from "../helpers.js";
+import { FakeHarness, ProjectRootWorkspaces, tempDir } from "../helpers.js";
 
 function unixFetch(socketPath: string): typeof fetch {
   const agent = new Agent({ connect: { socketPath } });

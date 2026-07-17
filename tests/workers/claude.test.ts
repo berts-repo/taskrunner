@@ -27,14 +27,12 @@ describe("ClaudeHarness", () => {
     const { events, onEvent } = collect();
 
     const result = await harness.runTurn({
-      workspaceDir: workspace,
       runner: fakeRunner(workspace),
       prompt: "create hello",
       signal: new AbortController().signal,
       onEvent,
     });
 
-    expect(result.exitCode).toBe(0);
     expect(result.nativeSessionId).toMatch(/^sess-/);
     expect(result.response).toContain("started sess-");
     // Workspace-relative: the absolute file_path prefix is stripped.
@@ -50,7 +48,6 @@ describe("ClaudeHarness", () => {
     const { onEvent } = collect();
 
     const result = await harness.runTurn({
-      workspaceDir: workspace,
       runner: fakeRunner(workspace),
       prompt: "continue please",
       nativeSessionId: "sess-existing",
@@ -67,7 +64,6 @@ describe("ClaudeHarness", () => {
     const { onEvent } = collect();
     await expect(
       harness.runTurn({
-        workspaceDir: workspace,
         runner: fakeRunner(workspace),
         prompt: "result-error",
         signal: new AbortController().signal,
@@ -82,7 +78,6 @@ describe("ClaudeHarness", () => {
     const { onEvent } = collect();
     await expect(
       harness.runTurn({
-        workspaceDir: workspace,
         runner: fakeRunner(workspace),
         prompt: "exit-nonzero",
         signal: new AbortController().signal,
@@ -97,7 +92,6 @@ describe("ClaudeHarness", () => {
     const controller = new AbortController();
     const { onEvent } = collect();
     const pending = harness.runTurn({
-      workspaceDir: workspace,
       runner: fakeRunner(workspace),
       prompt: "hang",
       signal: controller.signal,

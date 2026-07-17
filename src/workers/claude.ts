@@ -33,7 +33,7 @@ function extractEditedFiles(message: ClaudeLine, workspacePath: string, into: Se
   }
 }
 
-export interface ClaudeHarnessOptions {
+interface ClaudeHarnessOptions {
   /** Model to request, passed as `--model`. */
   model?: string;
 }
@@ -135,7 +135,6 @@ export class ClaudeHarness implements WorkerHarness {
               ...(sessionId ? { nativeSessionId: sessionId } : {}),
               changedFiles: [...changedFiles],
               ...(usage !== undefined ? { usage } : {}),
-              exitCode: code,
             }),
           );
         })

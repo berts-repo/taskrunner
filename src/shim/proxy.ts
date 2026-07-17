@@ -36,7 +36,7 @@ async function daemonIsUp(fetcher: typeof fetch): Promise<boolean> {
  * detached if needed. Losing an auto-start race is fine: the loser's `up`
  * exits on the lock, and both shims connect to the winner.
  */
-export async function ensureDaemon(paths: StatePaths): Promise<void> {
+async function ensureDaemon(paths: StatePaths): Promise<void> {
   const fetcher = unixFetch(paths);
   if (await daemonIsUp(fetcher)) return;
 

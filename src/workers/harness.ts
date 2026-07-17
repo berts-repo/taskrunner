@@ -1,6 +1,6 @@
 // Shared worker harness contract: start a turn,
 // resume by worker-native session ID, stream structured events, capture the
-// final response, exit status, and changed files.
+// final response and changed files.
 
 import type { WorkerRunner } from "./runner.js";
 
@@ -10,8 +10,6 @@ export interface WorkerEvent {
 }
 
 export interface TurnRequest {
-  /** Host path of the task workspace. */
-  workspaceDir: string;
   /** Where and how the worker process runs (host spawn or Docker container). */
   runner: WorkerRunner;
   prompt: string;
@@ -29,7 +27,6 @@ export interface TurnResult {
   /** Harness-reported changed files; the workspace git fallback fills gaps. */
   changedFiles?: string[];
   usage?: unknown;
-  exitCode: number | null;
 }
 
 export interface WorkerHarness {

@@ -5,7 +5,6 @@ export type ErrorCode =
   | "not_configured"
   | "approval_required"
   | "policy_denied"
-  | "capture_unavailable"
   | "worker_unavailable"
   | "worker_failed"
   | "conflict"

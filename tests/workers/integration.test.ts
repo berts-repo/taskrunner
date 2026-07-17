@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config.js";
@@ -9,21 +8,8 @@ import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
 import { CloneWorkspaces } from "../../src/workspace/clone.js";
-import { LocalRunner, tempDir } from "../helpers.js";
+import { initGitRepo, LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeCodex } from "./fake-codex.js";
-
-function initRepo(): string {
-  const repo = tempDir("repo");
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-  git("init", "-q");
-  git("config", "user.email", "test@example.com");
-  git("config", "user.name", "Test");
-  writeFileSync(join(repo, "README.md"), "hi\n");
-  git("add", ".");
-  git("commit", "-qm", "init");
-  return repo;
-}
 
 function makeStack(codexCommand: string) {
   const root = tempDir("stack");
@@ -51,7 +37,7 @@ function makeStack(codexCommand: string) {
 
 describe("scheduler + clone workspace + codex harness", () => {
   it("delegates, edits in the task workspace, resumes the same thread", async () => {
-    const repo = initRepo();
+    const repo = initGitRepo();
     const { scheduler, index, workspacesDir } = makeStack(writeFakeCodex());
 
     const first = await scheduler.assignTask({
@@ -91,7 +77,7 @@ describe("scheduler + clone workspace + codex harness", () => {
 
 describe.runIf(process.env["TASKRUNNER_LIVE_CODEX"] === "1")("live codex", () => {
   it("runs a real delegated turn end to end", async () => {
-    const repo = initRepo();
+    const repo = initGitRepo();
     const { scheduler, workspacesDir } = makeStack("codex");
     const outcome = await scheduler.assignTask({
       project: repo,

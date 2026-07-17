@@ -25,7 +25,6 @@ const workerSchema = z.object({
 export type WorkerConfig = z.infer<typeof workerSchema>;
 
 const configSchema = z.object({
-  daemon: z.object({}).passthrough().optional(),
   task: z
     .object({
       turn_timeout_seconds: z.number().int().positive().default(1800),

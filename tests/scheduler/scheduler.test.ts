@@ -2,13 +2,12 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config.js";
-import { ProjectRootWorkspaces, Scheduler } from "../../src/daemon/scheduler.js";
+import { Scheduler } from "../../src/daemon/scheduler.js";
 import { ToolError } from "../../src/domain/errors.js";
 import { ArtifactStore } from "../../src/storage/artifacts.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
-import { FakeHarness } from "../../src/workers/fake.js";
-import { LocalRunner, tempDir } from "../helpers.js";
+import { FakeHarness, LocalRunner, ProjectRootWorkspaces, tempDir } from "../helpers.js";
 
 function makeScheduler(configOverrides: object = {}) {
   const root = tempDir("sched");

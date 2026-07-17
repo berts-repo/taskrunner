@@ -16,9 +16,9 @@ import type { StateIndex } from "../storage/index.js";
 // include fields; history as paired exchanges, never loose audit rows; trace
 // replays inputs, observable worker activity, and outputs per in-scope turn.
 
-export type IncludeField = "turns" | "artifacts" | "audit" | "diff" | "trace";
+type IncludeField = "turns" | "artifacts" | "audit" | "diff" | "trace";
 
-export interface LookupArgs {
+interface LookupArgs {
   taskId?: string;
   project?: string;
   include?: IncludeField[];
@@ -26,7 +26,7 @@ export interface LookupArgs {
   limit?: number;
 }
 
-export interface LookupDeps {
+interface LookupDeps {
   index: StateIndex;
   artifacts: ArtifactStore;
 }

@@ -8,7 +8,7 @@ import type { LogEvent } from "./events.js";
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 
-export const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE projects (

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 // immutable once stored; metadata and links live in
 // the event log and index, not here.
 
-export interface StoredArtifact {
+interface StoredArtifact {
   sha256: string;
   size_bytes: number;
   locator: string;

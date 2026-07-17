@@ -53,7 +53,7 @@ function relativeToWorkspace(path: string, workspacePath: string): string {
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
-export interface CodexHarnessOptions {
+interface CodexHarnessOptions {
   /** Model to request (cloud or local), passed as `-m`. */
   model?: string;
   /** Local model server type; presence switches codex into --oss mode. */
@@ -161,7 +161,6 @@ export class CodexHarness implements WorkerHarness {
                 relativeToWorkspace(f, request.runner.workspacePath),
               ),
               ...(usage !== undefined ? { usage } : {}),
-              exitCode: code,
             }),
           );
         })

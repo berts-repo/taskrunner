@@ -5,7 +5,7 @@ import type { EventBody, LogEvent } from "../storage/events.js";
 import type { StateIndex } from "../storage/index.js";
 import { ToolError } from "./errors.js";
 
-export interface ProjectRef {
+interface ProjectRef {
   project_id: string;
   root: string;
 }

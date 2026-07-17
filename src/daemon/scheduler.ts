@@ -44,12 +44,6 @@ export interface WorkspaceProvider {
   afterTurn?(taskId: string, turnId: string, workspaceDir: string, projectRoot: string): void;
 }
 
-export class ProjectRootWorkspaces implements WorkspaceProvider {
-  ensureWorkspace(_taskId: string, projectRoot: string): Promise<string> {
-    return Promise.resolve(projectRoot);
-  }
-}
-
 /** Everything the runner factory needs to place one turn's worker process. */
 export interface RunnerContext {
   worker: string;
@@ -60,7 +54,7 @@ export interface RunnerContext {
   allowedDomains: string[];
 }
 
-export interface SchedulerDeps {
+interface SchedulerDeps {
   config: Config;
   index: StateIndex;
   record: (body: EventBody) => LogEvent;
@@ -281,7 +275,6 @@ export class Scheduler {
       });
 
       const result = await harness.runTurn({
-        workspaceDir,
         runner,
         prompt,
         ...(previousNativeId ? { nativeSessionId: previousNativeId } : {}),

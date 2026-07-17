@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config.js";
@@ -10,7 +8,7 @@ import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
 import { CloneWorkspaces } from "../../src/workspace/clone.js";
-import { LocalRunner, tempDir } from "../helpers.js";
+import { initGitRepo, LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeCodex } from "../workers/fake-codex.js";
 
 // One real two-turn task built through the whole stack (fake codex binary +
@@ -22,15 +20,7 @@ let taskId: string;
 let turnIds: string[];
 
 beforeAll(async () => {
-  repo = tempDir("repo");
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-  git("init", "-q");
-  git("config", "user.email", "t@example.com");
-  git("config", "user.name", "T");
-  writeFileSync(join(repo, "README.md"), "hi\n");
-  git("add", ".");
-  git("commit", "-qm", "init");
+  repo = initGitRepo();
 
   const root = tempDir("lookup");
   const log = EventLog.open(join(root, "events.jsonl"));

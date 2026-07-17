@@ -1,13 +1,30 @@
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
+import { setTimeout as sleep } from "node:timers/promises";
+import type { WorkspaceProvider } from "../src/daemon/scheduler.js";
 import type { EventBody, LogEvent } from "../src/storage/events.js";
+import type { TurnRequest, TurnResult, WorkerHarness } from "../src/workers/harness.js";
 import type { RunningWorker, WorkerRunner, WorkerSpawnSpec } from "../src/workers/runner.js";
 
 export function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `${prefix}-`));
+}
+
+/** Throwaway git repo with one committed README, for clone-workspace tests. */
+export function initGitRepo(): string {
+  const repo = tempDir("repo");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "T");
+  writeFileSync(join(repo, "README.md"), "hi\n");
+  git("add", ".");
+  git("commit", "-qm", "init");
+  return repo;
 }
 
 /** Spawns the worker argv directly in the workspace: the no-Docker test runner. */
@@ -44,6 +61,49 @@ export class LocalRunner implements WorkerRunner {
 
   dispose(): Promise<void> {
     return Promise.resolve();
+  }
+}
+
+/** Runs workers directly in the project root: no clone, no isolation. */
+export class ProjectRootWorkspaces implements WorkspaceProvider {
+  ensureWorkspace(_taskId: string, projectRoot: string): Promise<string> {
+    return Promise.resolve(projectRoot);
+  }
+}
+
+/**
+ * Scripted in-process harness for tests. Behavior is driven by directives in
+ * the prompt: `sleep:<ms>` delays (abortably), `fail` rejects. Native session
+ * IDs are `fake-<n>` and each resumed turn increments a per-session counter
+ * so continuation is observable.
+ */
+export class FakeHarness implements WorkerHarness {
+  readonly name = "fake";
+  private nextSession = 1;
+  private readonly turnCounts = new Map<string, number>();
+
+  async runTurn(request: TurnRequest): Promise<TurnResult> {
+    request.onEvent({ kind: "agent_message", payload: { text: "fake worker starting" } });
+
+    const sleepMatch = /sleep:(\d+)/.exec(request.prompt);
+    if (sleepMatch) {
+      await sleep(Number(sleepMatch[1]), undefined, { signal: request.signal });
+    }
+    request.signal.throwIfAborted();
+    if (request.prompt.includes("fail")) {
+      throw new Error("fake worker failure");
+    }
+
+    const sessionId = request.nativeSessionId ?? `fake-${this.nextSession++}`;
+    const turn = (this.turnCounts.get(sessionId) ?? 0) + 1;
+    this.turnCounts.set(sessionId, turn);
+    request.onEvent({ kind: "command_execution", payload: { command: "true" } });
+
+    return {
+      response: `echo: ${request.prompt} (session ${sessionId}, turn ${turn})`,
+      nativeSessionId: sessionId,
+      changedFiles: [],
+    };
   }
 }
 

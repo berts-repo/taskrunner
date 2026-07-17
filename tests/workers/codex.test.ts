@@ -23,14 +23,12 @@ describe("CodexHarness", () => {
     const { events, onEvent } = collect();
 
     const result = await harness.runTurn({
-      workspaceDir: workspace,
       runner: fakeRunner(workspace),
       prompt: "create hello",
       signal: new AbortController().signal,
       onEvent,
     });
 
-    expect(result.exitCode).toBe(0);
     expect(result.nativeSessionId).toMatch(/^thread-/);
     expect(result.response).toContain("started thread-");
     expect(result.changedFiles).toEqual(["hello.txt"]);
@@ -51,7 +49,6 @@ describe("CodexHarness", () => {
     const { onEvent } = collect();
 
     const result = await harness.runTurn({
-      workspaceDir: workspace,
       runner: fakeRunner(workspace),
       prompt: "continue please",
       nativeSessionId: "thread-existing",
@@ -68,7 +65,6 @@ describe("CodexHarness", () => {
     const { onEvent } = collect();
     await expect(
       harness.runTurn({
-        workspaceDir: workspace,
         runner: fakeRunner(workspace),
         prompt: "exit-nonzero",
         signal: new AbortController().signal,
@@ -83,7 +79,6 @@ describe("CodexHarness", () => {
     const controller = new AbortController();
     const { onEvent } = collect();
     const pending = harness.runTurn({
-      workspaceDir: workspace,
       runner: fakeRunner(workspace),
       prompt: "hang",
       signal: controller.signal,
@@ -111,7 +106,6 @@ describe("CodexHarness", () => {
     };
     const harness = new CodexHarness({ model: "gpt-oss:20b", provider: "ollama" });
     await harness.runTurn({
-      workspaceDir: "/ws",
       runner,
       prompt: "hello",
       signal: new AbortController().signal,
@@ -146,7 +140,6 @@ describe("CodexHarness", () => {
     const { onEvent } = collect();
     await expect(
       harness.runTurn({
-        workspaceDir: workspace,
         runner: new LocalRunner(workspace, "/nonexistent/codex-binary"),
         prompt: "x",
         signal: new AbortController().signal,

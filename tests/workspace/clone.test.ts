@@ -5,20 +5,7 @@ import { describe, expect, it } from "vitest";
 import { CloneWorkspaces } from "../../src/workspace/clone.js";
 import { ArtifactStore } from "../../src/storage/artifacts.js";
 import type { EventBody, LogEvent } from "../../src/storage/events.js";
-import { tempDir } from "../helpers.js";
-
-function initRepo(): string {
-  const repo = tempDir("repo");
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-  git("init", "-q");
-  git("config", "user.email", "t@example.com");
-  git("config", "user.name", "T");
-  writeFileSync(join(repo, "README.md"), "hi\n");
-  git("add", ".");
-  git("commit", "-qm", "init");
-  return repo;
-}
+import { initGitRepo, tempDir } from "../helpers.js";
 
 function gitIn(dir: string, ...args: string[]): string {
   return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
@@ -41,7 +28,7 @@ function makeProvider() {
 
 describe("CloneWorkspaces", () => {
   it("creates a self-contained clone on a task branch with no remotes", async () => {
-    const repo = initRepo();
+    const repo = initGitRepo();
     const { provider } = makeProvider();
     const dir = await provider.ensureWorkspace("task_c1", repo);
 
@@ -61,7 +48,7 @@ describe("CloneWorkspaces", () => {
   });
 
   it("collects uncommitted changes and captures a diff artifact", async () => {
-    const repo = initRepo();
+    const repo = initGitRepo();
     const { provider, recorded } = makeProvider();
     const dir = await provider.ensureWorkspace("task_c3", repo);
 
@@ -77,7 +64,7 @@ describe("CloneWorkspaces", () => {
   });
 
   it("lands committed work on the host repo under the task branch", async () => {
-    const repo = initRepo();
+    const repo = initGitRepo();
     const { provider } = makeProvider();
     const dir = await provider.ensureWorkspace("task_c4", repo);
 

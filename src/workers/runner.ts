@@ -45,7 +45,7 @@ function wrapChild(child: ChildProcess, kill: () => void): RunningWorker {
   };
 }
 
-export interface EgressDecision {
+interface EgressDecision {
   allowed: boolean;
   host: string;
   port: number;
@@ -61,7 +61,7 @@ export interface AuthMount {
   readOnly?: boolean;
 }
 
-export interface DockerRunnerOptions {
+interface DockerRunnerOptions {
   /** Host path of the task workspace (a task-local clone). */
   workspaceDir: string;
   /** Uniquifies container/network names; the turn id. */

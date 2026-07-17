@@ -29,16 +29,13 @@ export interface TurnInfo {
 
 export interface TaskSnapshot {
   task_id: string;
-  project_id: string;
   project_root: string;
-  session_id: string | null;
   worker: string;
   prompt_summary: string;
   status: string;
   tier: string | null;
   allow_domains: string[];
   approval_state: string;
-  created_at: string;
   updated_at: string;
   worker_session_id: string | null;
   turn_count: number;
@@ -118,16 +115,13 @@ export function getTaskSnapshot(index: StateIndex, taskId: string): TaskSnapshot
 
   return {
     task_id: task.id,
-    project_id: task.project_id,
     project_root: task.project_root,
-    session_id: task.session_id,
     worker: task.worker,
     prompt_summary: task.prompt_summary,
     status: task.status,
     tier: task.tier,
     allow_domains: task.allow_domains ? (JSON.parse(task.allow_domains) as string[]) : [],
     approval_state: task.approval_state,
-    created_at: task.created_at,
     updated_at: task.updated_at,
     worker_session_id: wsess?.native_session_id ?? null,
     turn_count: n,
@@ -173,7 +167,7 @@ export function listTaskSnapshots(
     .filter((s): s is TaskSnapshot => s !== null);
 }
 
-export interface AuditRow {
+interface AuditRow {
   ts: string;
   kind: string;
   payload: unknown;
