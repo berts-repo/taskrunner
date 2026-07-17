@@ -39,10 +39,43 @@ function errorResult(err: unknown): ToolResult {
   return { content: [{ type: "text", text: `error ${code}: ${message}` }], isError: true };
 }
 
+/**
+ * Server-level cheatsheet delivered to every client in the MCP handshake.
+ * Generated from config so the advertised workers and their egress defaults
+ * can never drift from what the daemon actually runs.
+ */
+function buildInstructions(config: Config): string {
+  const workers = Object.entries(config.worker).map(([name, cfg]) => {
+    const model = cfg.model ? ` (model: ${cfg.model})` : "";
+    const domains = cfg.allowed_domains.length > 0 ? cfg.allowed_domains.join(", ") : "none";
+    return `- ${name}${model} — default egress: ${domains}`;
+  });
+  return [
+    "Taskrunner runs delegated coding tasks in isolated Docker containers, one workspace per task.",
+    "",
+    "Configured workers (the `worker` argument to assign-task):",
+    ...workers,
+    "",
+    "Network access: a worker reaches only its default egress domains above. To grant more, " +
+      'pass allowDomains on assign-task; the value "*" means the entire public internet. ' +
+      "Loopback, LAN, and other private addresses stay blocked regardless. Any allowDomains " +
+      "value requires the user's explicit yes in conversation, relayed via userApproved: true. " +
+      "Every connection attempt a worker makes is audit-logged.",
+    "",
+    "Lifecycle: assign-task starts a task (wait: true blocks for the result); lookup-task " +
+      "fetches status, output, and audit records; continue-task sends a follow-up prompt to " +
+      "an existing task; cancel-task stops a running turn.",
+    "",
+    "Worker credentials live in Docker volumes on this host. If a turn fails with a " +
+      "login or auth error, the user must re-run the worker login procedure on the host " +
+      "(documented in the taskrunner README); it cannot be fixed through these tools.",
+  ].join("\n");
+}
+
 export function createMcpServer(ctx: ToolContext): McpServer {
   const server = new McpServer(
     { name: "taskrunner", version: VERSION },
-    { capabilities: {} },
+    { capabilities: {}, instructions: buildInstructions(ctx.config) },
   );
 
   /** Registers a tool with call auditing and uniform error mapping. */
@@ -89,8 +122,9 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         .optional()
         .describe(
           "Extra outbound domains the task may reach beyond the worker's API defaults " +
-            "(e.g. registry.npmjs.org). Makes the task 'networked': you must ask the " +
-            "user for permission and set userApproved.",
+            "(e.g. registry.npmjs.org), or '*' for the full public internet (local and " +
+            "private addresses stay blocked). Makes the task 'networked': you must ask " +
+            "the user for permission and set userApproved.",
         ),
       userApproved: z
         .boolean()
