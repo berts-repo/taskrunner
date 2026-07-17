@@ -32,11 +32,34 @@ over MCP.
   events link back to it.
 - **Artifact**: stored output such as diffs and raw worker event streams.
 
+## How it works
+
+The `mcp` command is a thin stdio shim: it forwards to a single daemon over
+a unix socket under the state root, auto-starting it if needed, so any
+number of MCP clients share one daemon. `assign-task` registers the project
+on first sight and clones it into a task-local workspace. Each turn then
+runs in a fresh worker container joined to an internal Docker network whose
+only route out is an egress proxy sidecar that forwards allowlisted domains
+and logs every decision. When the turn ends, the daemon captures the
+workspace diff and the worker's raw event stream as artifacts. Every
+observable step is appended to `events.jsonl` — the sole write path — and
+folded into a SQLite index that `lookup-task` reads and that can always be
+rebuilt from the log.
+
+Connecting agents need no out-of-band setup: the MCP handshake delivers
+server instructions generated from the live config — the configured workers
+with their egress defaults, the network-approval model, and the task
+lifecycle — so any client that honors instructions discovers what it can
+delegate and to whom.
+
 ## Quick Start
+
+Requires Node 22+ and Docker.
 
 ```sh
 npm install
 npm run build
+npm run build:images   # worker + egress proxy images
 claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js mcp
 ```
 
@@ -76,6 +99,46 @@ setting up. Log in at exactly the paths above (narrow `~/.codex` for codex,
 whole home for claude): logging in at the wrong path buries the credentials
 where the daemon's turn-time mounts can't see them, which surfaces as 401
 "Missing bearer" errors against `api.openai.com`.
+
+## Configuration
+
+Global config lives at `<state root>/config.toml` (so by default
+`~/.taskrunner/config.toml`). Every key has a working default; the file
+only exists to override them. The keys, shown with their defaults (the
+per-worker `harness`/`model`/`provider` keys are covered in the next
+section):
+
+```toml
+[task]
+turn_timeout_seconds = 1800   # per-turn wall-clock limit
+
+[worker.codex]                # built-in; [worker.claude] is analogous
+image = "taskrunner/codex-worker"
+auth_volume = "taskrunner-codex-home"
+allowed_domains = ["api.openai.com", "auth.openai.com", "chatgpt.com", "*.chatgpt.com"]
+
+[egress]
+proxy_image = "taskrunner/egress-proxy"
+```
+
+Any other `[worker.<name>]` section defines a new worker — see below.
+
+## Network access
+
+A worker's default egress is its `allowed_domains` — normally just its own
+vendor's API, so a task cannot fetch web pages or install packages out of
+the box. To grant more, the delegating agent passes `allowDomains` on
+`assign-task`; any value makes the task "networked", which requires your
+explicit yes in conversation (relayed as `userApproved: true` and recorded
+in the audit log). The value `"*"` grants the entire public internet.
+
+Whatever the allowlist says, the proxy resolves every destination itself
+and refuses loopback, LAN, and other special-use addresses — an approved
+(or DNS-rebinding) domain can never reach your local network. Deliberate
+local destinations must be pinned explicitly, either as an IP-literal entry
+(`127.0.0.1:8080`) or a Docker host name (`host.docker.internal:11434`).
+Entries without a port — including `"*"` — cover only ports 80 and 443.
+Every connection attempt, allowed or refused, lands in the audit trail.
 
 ## Custom and local-model workers
 
