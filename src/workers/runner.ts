@@ -4,10 +4,10 @@ import type { Readable } from "node:stream";
 import { ToolError } from "../domain/errors.js";
 
 // Per-turn execution runtime for worker processes. Harnesses build a worker
-// argv (codex/claude CLI invocations) and the runner decides where it runs:
-// directly on the host in the workspace directory, or inside a Docker
+// argv (codex/claude CLI invocations) and the runner runs it inside a Docker
 // container with the workspace mounted at /workspace behind the egress proxy
-// (PLAN § Workspace And Isolation, § Risk tiers and default policy).
+// (PLAN § Workspace And Isolation). `kind: "host"` exists only for the local
+// test runner that exercises harnesses without Docker.
 
 export interface WorkerSpawnSpec {
   /** Logical worker argv, e.g. ["codex", "exec", ...]. */
@@ -43,36 +43,6 @@ function wrapChild(child: ChildProcess, kill: () => void): RunningWorker {
     }),
     kill,
   };
-}
-
-/** Runs the worker CLI directly on the host inside the workspace directory. */
-export class HostRunner implements WorkerRunner {
-  readonly kind = "host";
-
-  constructor(
-    readonly workspacePath: string,
-    /** Overrides argv[0]; how config `[worker.<name>] command` takes effect. */
-    private readonly command?: string,
-  ) {}
-
-  start(spec: WorkerSpawnSpec): Promise<RunningWorker> {
-    const [logical, ...rest] = spec.argv;
-    const child = spawn(this.command ?? (logical as string), rest, {
-      cwd: this.workspacePath,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...spec.env },
-    });
-    const kill = () => {
-      child.kill("SIGTERM");
-      const hard = setTimeout(() => child.kill("SIGKILL"), 2000);
-      hard.unref();
-    };
-    return Promise.resolve(wrapChild(child, kill));
-  }
-
-  dispose(): Promise<void> {
-    return Promise.resolve();
-  }
 }
 
 export interface EgressDecision {
@@ -188,15 +158,14 @@ export class DockerRunner implements WorkerRunner {
     if (!this.options.image) {
       throw new ToolError(
         "not_configured",
-        "this worker has no Docker image configured; set [worker.<name>] image " +
-          'or runtime = "host"',
+        "this worker has no Docker image configured; set [worker.<name>] image",
       );
     }
     const info = docker(this.dockerCmd, ["version", "--format", "{{.Server.Version}}"]);
     if (!info.ok) {
       throw new ToolError(
         "worker_unavailable",
-        "Docker is not available; start Docker Desktop or configure runtime = \"host\"",
+        "Docker is not available; start Docker Desktop",
       );
     }
     if (!docker(this.dockerCmd, ["image", "inspect", this.options.image]).ok) {

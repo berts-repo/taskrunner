@@ -10,23 +10,19 @@ import { VERSION } from "./version.js";
 const USAGE = `Usage: taskrunner <command> [--state-root <dir>]
 
 Commands:
-  up                 Start the Taskrunner daemon in the foreground.
-  down               Stop the running daemon.
-  status             Report daemon status.
-  approve <task_id>  Approve a task that waits for a human decision.
-  deny <task_id>     Deny a waiting task; it never runs.
-  mcp                Run the stdio MCP shim (auto-starts the daemon).
+  up      Start the Taskrunner daemon in the foreground.
+  down    Stop the running daemon.
+  status  Report daemon status.
+  mcp     Run the stdio MCP shim (auto-starts the daemon).
 `;
 
 interface Args {
   command: string | undefined;
-  taskId: string | undefined;
   paths: StatePaths;
 }
 
 function parseArgs(argv: string[]): Args {
   let command: string | undefined;
-  let taskId: string | undefined;
   let root = process.env["TASKRUNNER_STATE_ROOT"];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -35,13 +31,11 @@ function parseArgs(argv: string[]): Args {
       if (!root) throw new Error("--state-root requires a directory argument");
     } else if (command === undefined) {
       command = arg;
-    } else if ((command === "approve" || command === "deny") && taskId === undefined) {
-      taskId = arg;
     } else {
       throw new Error(`unexpected argument '${arg}'`);
     }
   }
-  return { command, taskId, paths: root ? statePaths(root) : statePaths() };
+  return { command, paths: root ? statePaths(root) : statePaths() };
 }
 
 async function up(paths: StatePaths): Promise<number> {
@@ -127,48 +121,6 @@ async function status(paths: StatePaths): Promise<number> {
   }
 }
 
-async function decide(
-  paths: StatePaths,
-  decision: "approve" | "deny",
-  taskId: string | undefined,
-): Promise<number> {
-  if (!taskId) {
-    process.stderr.write(`taskrunner: ${decision} requires a task id\n\n${USAGE}`);
-    return 1;
-  }
-  const agent = new Agent({ connect: { socketPath: paths.socketPath } });
-  try {
-    const res = await undiciFetch(`http://taskrunner/${decision}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task_id: taskId }),
-      dispatcher: agent,
-      signal: AbortSignal.timeout(10_000),
-    });
-    const body = (await res.json()) as {
-      error?: string;
-      message?: string;
-      status?: string;
-      approval_state?: string;
-      turn_id?: string | null;
-    };
-    if (!res.ok) {
-      process.stderr.write(`taskrunner: ${body.error ?? res.status}: ${body.message ?? ""}\n`);
-      return 1;
-    }
-    process.stdout.write(
-      `task ${taskId} ${body.approval_state}` +
-        (body.turn_id ? `; turn ${body.turn_id} started (status: ${body.status})\n` : "\n"),
-    );
-    return 0;
-  } catch {
-    process.stderr.write("taskrunner daemon is not running\n");
-    return 1;
-  } finally {
-    await agent.close();
-  }
-}
-
 async function main(argv: string[]): Promise<number> {
   let args: Args;
   try {
@@ -184,9 +136,6 @@ async function main(argv: string[]): Promise<number> {
       return down(args.paths);
     case "status":
       return status(args.paths);
-    case "approve":
-    case "deny":
-      return decide(args.paths, args.command, args.taskId);
     case "mcp":
       await runShim(args.paths);
       // The shim owns the process from here; it exits via its own shutdown.

@@ -36,10 +36,8 @@ export interface TaskSnapshot {
   prompt_summary: string;
   status: string;
   tier: string | null;
-  runtime: string | null;
   allow_domains: string[];
   approval_state: string;
-  pending_prompt: string | null;
   created_at: string;
   updated_at: string;
   worker_session_id: string | null;
@@ -98,10 +96,8 @@ export function getTaskSnapshot(index: StateIndex, taskId: string): TaskSnapshot
         prompt_summary: string;
         status: string;
         tier: string | null;
-        runtime: string | null;
         allow_domains: string | null;
         approval_state: string;
-        pending_prompt: string | null;
         created_at: string;
         updated_at: string;
       }
@@ -129,10 +125,8 @@ export function getTaskSnapshot(index: StateIndex, taskId: string): TaskSnapshot
     prompt_summary: task.prompt_summary,
     status: task.status,
     tier: task.tier,
-    runtime: task.runtime,
     allow_domains: task.allow_domains ? (JSON.parse(task.allow_domains) as string[]) : [],
     approval_state: task.approval_state,
-    pending_prompt: task.pending_prompt,
     created_at: task.created_at,
     updated_at: task.updated_at,
     worker_session_id: wsess?.native_session_id ?? null,

@@ -25,14 +25,7 @@ export function renderOutcome(outcome: TurnOutcome): string {
     lines.push("", "artifacts:", ...outcome.artifacts.map(artifactLine));
   }
   if (outcome.error) lines.push("", `error ${outcome.error.code}: ${outcome.error.message}`);
-  if (outcome.approval_state === "pending") {
-    lines.push(
-      "",
-      "This task waits for a human decision. Tell the user to run:",
-      `  taskrunner approve ${outcome.task_id}`,
-      `or: taskrunner deny ${outcome.task_id}`,
-    );
-  } else if (outcome.status === "running") {
+  if (outcome.status === "running") {
     lines.push("", "Turn is running. Use lookup-task with this task id to retrieve the result.");
   }
   return lines.join("\n");

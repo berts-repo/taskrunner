@@ -1,6 +1,6 @@
 # Taskrunner MCP Server
 
-Taskrunner is a local-first session, audit, memory, and delegation layer for
+Taskrunner is a local-first session, audit, and delegation layer for
 Claude Code, Codex, Gemini, and other MCP-compatible clients.
 
 It is designed to act as:
@@ -8,7 +8,8 @@ It is designed to act as:
 - An MCP toolbox for agents and users.
 - A durable session and audit layer for participating clients.
 - A local delegation broker for configured workers.
-- A project-scoped memory and artifact store.
+- A project-scoped evidence and artifact store, queryable by external
+  assistant agents over MCP.
 
 ## Goals
 
@@ -18,8 +19,8 @@ It is designed to act as:
 - Keep active client context small through compact project-scoped records.
 - Maintain a complete audit trail for sessions, delegation, worker activity,
   approvals, errors, artifacts, and file changes.
-- Use task-specific isolated git workspaces (worktrees on host, task-local
-  clones in Docker) and worker isolation for delegated coding.
+- Use task-specific isolated git workspaces (task-local clones) and Docker
+  worker isolation for delegated coding.
 - Remain portable across workstations with optional client and worker
   integrations.
 
@@ -48,9 +49,8 @@ It is designed to act as:
   - Native hooks/plugins are enhanced integrations where reliable.
   - Log/session import is a recovery path.
 - Delegation: explicit, multi-turn, project-scoped tasks.
-- Worker isolation: Docker containers by default, task-specific git workspaces
-  (worktrees on host, task-local clones in Docker), network disabled unless
-  approved.
+- Worker isolation: Docker containers, task-specific git workspaces
+  (task-local clones), network disabled unless approved.
 - Secrets: environment variables and explicitly configured worker credentials,
   without broad host secret inheritance.
 - Configuration: TOML, with global defaults and project overrides.
@@ -66,13 +66,13 @@ It is designed to act as:
 
 ## Status
 
-Phase 1 (the usable broker) is implemented: the on-demand daemon, the stdio
-MCP shim with auto-start, the four core MCP tools with the async delegation
-contract, a host-run Codex worker in per-task worktrees, the JSONL event log
-with a rebuildable SQLite index, and trace-capable lookup. Phase 2 (safety)
-adds Docker workers in task-local clones behind a filtering egress proxy,
-risk tiers, and the approval flow. Later phases (memory, sync) are specified
-in `docs/specs/PLAN.md`.
+The product is feature-complete: the on-demand daemon, the stdio MCP shim
+with auto-start, the four core MCP tools with the async delegation contract,
+the JSONL event log with a rebuildable SQLite index, trace-capable lookup,
+and Docker workers (codex and claude) in task-local clones behind a
+filtering egress proxy. New workers land as config entries via the pluggable
+`harness` mechanism. The formerly planned knowledge and sync phases, and the
+early host-run worker mode, are recorded as cut in `docs/specs/PLAN.md`.
 
 ## Worker sign-in
 
@@ -135,6 +135,5 @@ The daemon starts on demand and keeps durable state under `~/.taskrunner/`.
 CLI: `taskrunner up | down | status | mcp` (`--state-root <dir>` overrides the
 state root).
 
-Tests: `npm test`. Full end-to-end check against the built CLI:
-`npx tsx scripts/verify-e2e.ts`. Live Codex delegation check (requires
+Tests: `npm test`. Live Codex delegation check (requires
 `codex login`): `TASKRUNNER_LIVE_CODEX=1 npx vitest run tests/workers/integration.test.ts`.

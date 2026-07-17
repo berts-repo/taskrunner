@@ -1,10 +1,12 @@
 # Cross-Workstation Sync (Proposal)
 
-Status: possible addition, not adopted. This is a design writeup for review,
-not a committed part of the baseline plan in `PLAN.md`. One piece has since
-been adopted into the baseline: the log-first write path (event log as source
-of truth, SQLite as derived index) now lives in `PLAN.md` build-spec
-§ Storage write path, which keeps this proposal additive if adopted.
+Status: shelved (2026-07-16). Cross-workstation sync was cut from scope along
+with the knowledge layer; see `PLAN.md` § Implementation phases. This writeup
+is kept for the record and would need revision before any revival — it
+predates the scope cut and still references memory records, which Taskrunner
+no longer keeps. One piece was adopted into the baseline earlier: the
+log-first write path (event log as source of truth, SQLite as derived index)
+now lives in `PLAN.md` build-spec § Storage write path.
 
 ## Why this exists
 

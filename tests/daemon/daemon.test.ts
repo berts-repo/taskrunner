@@ -6,10 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Agent, fetch as undiciFetch } from "undici";
-import { AlreadyRunningError, Daemon } from "../../src/daemon/daemon.js";
+import { AlreadyRunningError, Daemon, type DaemonOptions } from "../../src/daemon/daemon.js";
 import { statePaths } from "../../src/paths.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
-import { tempDir } from "../helpers.js";
+import { LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeCodex } from "../workers/fake-codex.js";
 
 function unixFetch(socketPath: string): typeof fetch {
@@ -20,8 +20,8 @@ function unixFetch(socketPath: string): typeof fetch {
 
 const daemons: Daemon[] = [];
 
-async function startDaemon(root: string): Promise<Daemon> {
-  const daemon = await Daemon.start(statePaths(root));
+async function startDaemon(root: string, options: DaemonOptions = {}): Promise<Daemon> {
+  const daemon = await Daemon.start(statePaths(root), options);
   daemons.push(daemon);
   return daemon;
 }
@@ -98,13 +98,11 @@ describe("Daemon", () => {
 
   it("runs a worker that exists only in config, end to end", async () => {
     // The pluggability acceptance test: no injected harnesses, no code that
-    // knows this worker's name — just a [worker.<name>] config section.
+    // knows this worker's name — just a [worker.<name>] config section. Only
+    // the runner factory is stubbed so the fake codex binary runs sans Docker.
     const root = tempDir("daemon");
     mkdirSync(root, { recursive: true });
-    writeFileSync(
-      join(root, "config.toml"),
-      `[worker.configling]\nharness = "codex"\ncommand = "${writeFakeCodex()}"\nruntime = "host"\n`,
-    );
+    writeFileSync(join(root, "config.toml"), `[worker.configling]\nharness = "codex"\n`);
 
     const repo = tempDir("repo");
     const git = (...args: string[]) =>
@@ -116,17 +114,16 @@ describe("Daemon", () => {
     git("add", ".");
     git("commit", "-qm", "init");
 
-    const daemon = await startDaemon(root);
+    const fakeCodex = writeFakeCodex();
+    const daemon = await startDaemon(root, {
+      makeRunner: (ctx) => new LocalRunner(ctx.workspaceDir, fakeCodex),
+    });
     const assigned = await daemon.scheduler.assignTask({
       project: repo,
       worker: "configling",
       prompt: "create hello",
     });
-    // Host runtime keeps its privileged gate for config-defined workers too.
-    expect(assigned.tier).toBe("privileged");
-    expect(assigned.approval_state).toBe("pending");
-
-    await daemon.scheduler.approveTask(assigned.task_id);
+    expect(assigned.tier).toBe("workspace-write");
     let status = "";
     for (let i = 0; i < 200; i++) {
       status = daemon.scheduler.outcome(assigned.task_id).status;

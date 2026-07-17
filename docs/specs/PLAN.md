@@ -3,8 +3,8 @@
 ## Goal
 
 Taskrunner is a local-first MCP server for durable sessions, prompt/response
-audit, project memory, artifact capture, and delegated worker execution across
-Claude Code, Codex, Gemini, and other MCP-compatible clients.
+audit, artifact capture, and delegated worker execution across Claude Code,
+Codex, Gemini, and other MCP-compatible clients.
 
 The plan describes the target system as one coherent architecture. Work can be
 implemented incrementally, but the design should stay oriented around the full
@@ -24,14 +24,11 @@ portable workstation experience rather than disconnected scope slices.
 - Always-on audit for every prompt and response Taskrunner can observe.
 - Explicit delegation to configured workers.
 - Project-scoped task records and continuation.
-- Human-authored project memory records plus deterministic task summaries,
-  indexed and searchable; automatic extraction from the audit stream is
-  deferred.
 - Artifact capture for normal sessions and delegated work.
 - Task-specific isolated git workspaces as the code-state boundary for
-  delegated coding: worktrees for host-run workers, task-local clones for
-  Docker workers.
-- Docker containers as the preferred worker isolation model.
+  delegated coding: a self-contained task-local clone per task.
+- Docker containers as the only worker isolation model (host-run execution
+  was cut 2026-07-16).
 - Global defaults plus persistent project policy.
 - TOML configuration.
 - Secrets via environment variables, including optional local `.env` support.
@@ -47,11 +44,10 @@ From the user's perspective:
 - Launch participating clients through portable wrapper commands when native
   capture is not available.
 - Keep normal client behavior native unless Taskrunner delegation, lookup,
-  memory, or audit workflows are invoked.
+  or audit workflows are invoked.
 - Ask the active client to delegate work to a configured worker.
 - Continue delegated tasks across turns.
-- Look up prior task records, summaries, artifacts, and decisions for the same
-  project.
+- Look up prior task records, artifacts, and traces for the same project.
 - Move between workstations without requiring every client or worker integration
   to be installed everywhere.
 
@@ -81,7 +77,7 @@ Recovery capture:
 
 Manual MCP calls:
 
-- Used for explicit workflows such as delegation, lookup, memory, and audit
+- Used for explicit workflows such as delegation, lookup, and audit
   commands.
 - Not the primary mechanism for always-on audit.
 
@@ -100,7 +96,6 @@ Audit records should include:
 - Errors.
 - File changes.
 - Artifact references.
-- Memory writes.
 - Lookups.
 - Timestamps.
 - Project, session, task, turn, client, and worker links.
@@ -157,8 +152,7 @@ The harness should support:
 - Capturing logs and raw worker events.
 - Exporting enough worker-native session state after each turn for durable
   continuation.
-- Running behind a runtime boundary that supports Docker execution and a host
-  execution fallback when necessary.
+- Running behind the Docker runtime boundary.
 
 Codex is the current worker starting point because the backend spike proved `codex exec` and
 `codex exec resume` can start, resume, emit JSONL events, expose a `thread_id`,
@@ -176,18 +170,16 @@ tests are completed.
 
 Delegated coding workers should run in isolated workspaces.
 
-- Each delegated coding task gets a task-specific isolated git workspace.
-- The workspace mechanism depends on the runtime boundary:
-  - Host-run workers use a task-specific git worktree.
-  - Docker workers use a task-local clone (`git clone --no-hardlinks` from
-    the host repository), because a worktree's `.git` file points back into
-    the main repository. Mounting only the worktree breaks git inside the
-    container, and mounting the main repository's `.git` writable would let a
-    worker plant hooks or config that execute on the host. `--no-hardlinks`
-    matters: a default local clone hardlinks object files, which share inodes
-    with the host repository — a worker writing through one could corrupt
-    host history.
-- Docker task clones are fully self-contained and disposable. Completed work
+- Each delegated coding task gets a task-specific isolated git workspace: a
+  task-local clone (`git clone --no-hardlinks` from the host repository).
+  A clone rather than a worktree because a worktree's `.git` file points back
+  into the main repository: mounting only the worktree breaks git inside the
+  container, and mounting the main repository's `.git` writable would let a
+  worker plant hooks or config that execute on the host. `--no-hardlinks`
+  matters: a default local clone hardlinks object files, which share inodes
+  with the host repository — a worker writing through one could corrupt
+  host history.
+- Task clones are fully self-contained and disposable. Completed work
   lands by fetching the task branch from the clone on the host side, followed
   by review; the worker never writes to the real repository.
 - The same workspace is reused across turns for the same task.
@@ -198,11 +190,10 @@ Delegated coding workers should run in isolated workspaces.
 
 Container posture:
 
-- Coding workers run in Docker containers by default.
-- Research/fetch workers run in separate containers.
+- Workers always run in Docker containers; there is no host-run mode.
 - Containers are execution sandboxes, not the system of record.
-- Taskrunner database, audit log, artifact store, session graph, and memory
-  stay outside worker containers.
+- Taskrunner database, audit log, artifact store, and session graph stay
+  outside worker containers.
 - Containers should run as non-root where practical.
 - Workspace mounts should be narrow: only the task-local clone directory, and
   never the main repository or its `.git`.
@@ -218,7 +209,7 @@ Container posture:
   on the host, keeping it internet-free.
 
 Taskrunner itself may run narrow host operations needed for orchestration,
-storage, policy checks, git workspace setup (worktrees and task clones),
+storage, policy checks, git workspace setup (task clones),
 task-branch fetch from completed clones, artifact/session-state copy-out,
 worker lifecycle, and cleanup. Arbitrary delegated edits and broad shell commands
 belong in workers.
@@ -262,7 +253,6 @@ Global durable state:
 - Session graph.
 - Task/turn graph.
 - Artifact metadata.
-- Indexed memory records.
 - Instruction snapshots.
 - Worker-native session references.
 - Policy and approval records.
@@ -280,53 +270,24 @@ state so projects can move across workstations cleanly.
 
 ## Memory And Context Control
 
-Memory starts slim. The knowledge layer has two sources:
+Taskrunner keeps no memory layer (decided 2026-07-16). Knowledge — decisions,
+facts, summaries, notes — lives in the user's personal assistant hub
+(Hermes/OpenClaw), which has its own memory system. Taskrunner is the evidence
+store that hub queries: an ordinary MCP client pulls task records, traces,
+diffs, and artifacts through `lookup-task`. Taskrunner never pushes memory
+into other systems and never maintains its own knowledge garden.
 
-- Compact task and turn summaries built deterministically from what workers
-  already return (final answer, status, changed files) — always on, no model
-  involved.
-- Human-authored memory records: when a decision or fact matters, the user
-  writes the note.
+Context control for delegated work:
 
-No LLM reads the audit stream to write notes. Automatic extraction is
-deferred until the slim layer proves too thin in practice; because the audit
-trail retains the underlying evidence, extraction can be added later and
-backfilled over old tasks without rework.
-
-Memory records follow the instruction-package pattern: markdown files under
-`.taskrunner/memory/` are the human-readable, human-editable source of truth,
-and the database keeps snapshots and indexes over them. Editing the file is
-editing the memory. This keeps the knowledge layer legible and directly usable
-by external tools such as Obsidian, while the machine-generated audit trail
-stays in structured storage.
-
-Memory records include:
-
-- Decisions.
-- Facts.
-- Follow-up tasks.
-
-Compact task summaries come from the deterministic structural path, not from
-memory files. Session summaries are deferred along with automatic
-extraction.
-
-Retrieval behavior:
-
-- Project-directory first.
-- Optional global lookup.
-- Compact by default.
-- Expand only when the user, agent, or workflow asks for detail.
-- Avoid loading broad history into active client context.
-- Memory reaches delegated workers only through explicit `context` refs or a
+- Context reaches delegated workers only through explicit `context` refs or a
   worker-initiated lookup; there is no automatic injection into worker
   prompts.
-- External assistant tools (personal agent daemons, note systems) are
-  ordinary MCP clients: they pull project knowledge through the lookup
-  surface. Taskrunner does not push memory into other systems.
+- Lookups are compact by default and expand only when the caller asks for
+  detail, avoiding broad history loads into active client context.
 
-Semantic/vector search is part of the target memory strategy when it improves
-retrieval quality, but plain structured/text retrieval should remain available
-and predictable.
+If a summarization or extraction need ever materializes, the external hub can
+build it on top of the retained audit trail; nothing in Taskrunner needs to
+change for that.
 
 ## Instructions
 
@@ -364,7 +325,6 @@ Core tools:
 
 Specialized tools can be added when workflows need separate contracts:
 
-- memory lookup
 - task lookup expansion
 - rules lookup
 - audit lookup
@@ -384,7 +344,7 @@ History presentation rules:
 - History lookups present prompt/response pairs as ordered exchanges by
   default, never loose audit rows the caller must correlate.
 - A trace view replays delegated work end-to-end: inputs (prompt, instruction
-  snapshot, injected context and memory), observable worker activity
+  snapshot, injected context), observable worker activity
   (reasoning messages, commands, file reads and edits), and outputs (response,
   diff, status).
 - Trace and history requests accept a scope argument: a single turn, the last
@@ -435,7 +395,7 @@ Approval model:
 
 - Calling agent first.
 - Human approval for higher-risk expansion.
-- Consequential actions require approval even when memory or retrieved content
+- Consequential actions require approval even when retrieved content
   suggests them.
 
 Retention model:
@@ -483,7 +443,7 @@ This includes:
 - Project-local directory name.
 - Database concepts that appear in docs, logs, or exported records.
 - Session, task, run, job, thread, worker, backend, provider, artifact, rule,
-  memory, and risk-tier terminology.
+  and risk-tier terminology.
 
 `NAMING.md` tracks approved, candidate, retired, and avoided terms.
 
@@ -496,8 +456,7 @@ Current approved naming decisions:
 - Durable client interaction record: session.
 - Execution runtime: worker.
 - Worker integration code: worker harness.
-- Per-task isolated git copy (worktree on host, clone in Docker): task
-  workspace.
+- Per-task isolated git copy (a task-local clone): task workspace.
 - Stored output: artifact.
 - Optional setup unit: integration.
 - Enabled support unit: configured capability.
@@ -518,8 +477,6 @@ Portable shared paths under `.taskrunner/`:
 - `project.toml`: project identity and shared defaults.
 - `instructions/`: instruction packages, each with `instruction.toml` and
   `body.md`.
-- `memory/`: memory records as markdown files, the editable source of truth
-  indexed and snapshotted by the database.
 - `policy/`: shared project policy overlays and allowlists.
 - `imports/`: optional checked-in imported reference material intended to move
   with the project.
@@ -544,7 +501,7 @@ Git posture:
 - Ignore `.taskrunner/local/` wholesale by default.
 - Treat `.taskrunner/sessions/` as portable project history that normally moves
   with project pushes and pulls.
-- Do not place task workspaces (worktrees or task clones) inside
+- Do not place task workspaces (task clones) inside
   `.taskrunner/`; Taskrunner may reference them from local runtime state, but
   workspace directories themselves should live in a Taskrunner-managed local
   runtime root outside the project tree.
@@ -584,8 +541,6 @@ Initial durable tables:
   types.
 - `artifact_links`: joins between artifacts and sessions, tasks, turns, or
   audit events.
-- `memory_records`: decisions, facts, and follow-ups from indexed memory
-  files.
 - `instruction_packages`: logical filesystem instruction identities.
 - `instruction_snapshots`: point-in-time bodies and metadata used by sessions,
   tasks, or turns.
@@ -595,8 +550,7 @@ Initial durable tables:
 
 Core relationships:
 
-- A `project` has many `sessions`, `tasks`, `memory_records`, and project-level
-  `policy_sets`.
+- A `project` has many `sessions`, `tasks`, and project-level `policy_sets`.
 - A `session` may create many `tasks` and many `audit_events`.
 - A `task` belongs to one `project`, may reference one originating `session`,
   has many `turns`, and may have many `worker_sessions` over time.
@@ -604,7 +558,7 @@ Core relationships:
   and has many `audit_events`, `artifacts`, `approval_records`, and
   `instruction_snapshots`.
 - `audit_events` are the common event spine and may link to a `session`, `task`,
-  `turn`, `artifact`, `approval_record`, or `memory_record`.
+  `turn`, `artifact`, or `approval_record`.
 - `artifacts` are immutable once stored; relationships live in
   `artifact_links`.
 - `instruction_snapshots` are immutable and referenced by the exact session,
@@ -669,7 +623,7 @@ With `wait`, the response carries the completed turn.
 
 - One of `taskId`, `sessionId`, or a constrained project-scoped query.
 - Optional `include` fields such as `turns`, `artifacts`, `audit`,
-  `approvals`, `memory`, `diff`, or `trace`.
+  `approvals`, `diff`, or `trace`.
 - Optional `scope` for history and trace expansion: a single `turnId`, the
   last N exchanges, a whole session, or a whole task.
 - Optional pagination controls for expanded results.
@@ -720,14 +674,13 @@ Error codes:
 
 ### 4. Risk tiers and default policy
 
-Default risk tiers:
+Default risk tiers (the `privileged` tier was removed with host-run mode,
+2026-07-16 — workers always run in Docker):
 
-- `read-only`: lookup, audit, memory, and other non-mutating operations.
+- `read-only`: lookup, audit, and other non-mutating operations.
 - `workspace-write`: isolated delegated edits inside the task workspace with no
   network.
 - `networked`: delegated work that needs outbound network or package install.
-- `privileged`: host-level operations, broad mounts, or exceptional credential
-  exposure.
 
 Approval defaults:
 
@@ -735,17 +688,9 @@ Approval defaults:
   participating session.
 - `workspace-write` requires explicit delegation but not an extra step beyond
   the delegation action itself.
-- `networked` requires task-level approval.
-- `privileged` always requires human approval.
-
-How approval is given (mixed by risk):
-
-- `networked`: approved in-conversation; the calling agent relays the user's
-  yes to Taskrunner, and the approval record shows it came through that agent.
-- `privileged`: approved only by the human running `taskrunner approve
-  <task_id>` (or `taskrunner deny <task_id>`) directly; agent-relayed
-  approval is not accepted for this tier.
-- Host-run (non-Docker) worker execution is classified `privileged`.
+- `networked` requires task-level approval, given in-conversation: the calling
+  agent relays the user's yes to Taskrunner, and the approval record shows it
+  came through that agent.
 
 Global hard limits:
 
@@ -781,7 +726,7 @@ Default retention:
 
 - Core records are retained indefinitely by default:
   projects, sessions, tasks, turns, approvals, policy sets, instruction
-  snapshots, memory records, and compact audit metadata.
+  snapshots, and compact audit metadata.
 - Expirable large artifacts are retained for 90 days by default:
   raw worker event streams, verbose logs, imported supporting material, and
   large patch bundles. Reasoning, command, and file-change events are extracted
@@ -792,9 +737,9 @@ Default retention:
 
 Protected records:
 
-- Sessions, tasks, turns, approvals, instruction snapshots, memory records, and
-  the minimal audit/event records required to reconstruct history are protected
-  from automatic cleanup.
+- Sessions, tasks, turns, approvals, instruction snapshots, and the minimal
+  audit/event records required to reconstruct history are protected from
+  automatic cleanup.
 - Prompt/response bodies and worker reasoning events are protected so trace
   views stay complete for the life of the record; only bulky raw event streams
   and verbose logs are expirable.
@@ -808,8 +753,8 @@ Capacity policy:
 Export formats:
 
 - Full SQLite export for lossless local backup.
-- JSONL export for sessions, tasks, turns, audit events, approvals, policies,
-  and memory records.
+- JSONL export for sessions, tasks, turns, audit events, approvals, and
+  policies.
 - Artifact directory export with a manifest file.
 
 Artifact references in exports:
@@ -930,28 +875,32 @@ around it:
   paired-exchange lookup, and trace view. No Docker, no wrappers, no memory
   extraction.
 - Phase 2, safety: Docker workers with task clones, egress proxy with
-  per-worker `allowed_domains`, enforced risk tiers and approvals (mixed by
-  risk: agent-relayed for `networked`, human `taskrunner approve` for
-  `privileged`), Claude worker after its authenticated retest. Host-run mode
-  is retained behind config as `privileged`. Stretch goal (delivered):
-  pluggable workers via the `harness` config key, with local-model workers
-  (`provider`/`model`, internet-free, local model port only) verified
-  end-to-end against a stand-in model server. Sequencing starts with the
-  Claude authenticated Docker retest.
-- Phase 3, knowledge (slim scope decided 2026-07-16): deterministic compact
-  task summaries from existing worker output, project-scoped text search
-  across summaries and memory records, human-authored markdown memory files
-  under `.taskrunner/memory/` indexed by the database, and the MCP lookup
-  surface external assistant clients need to query project knowledge.
-  Explicitly out of scope: LLM memory extraction, automatic memory injection
-  into worker prompts, session summaries, and dedicated Obsidian views
-  (plain markdown files remain Obsidian-compatible on their own). Rationale:
-  the user runs a personal assistant agent as the daily knowledge hub;
-  Taskrunner stays the evidence store it queries, avoiding a second
-  knowledge garden. Automatic extraction remains a deferred enhancement,
-  backfillable from the retained audit trail if slim proves too thin.
-- Phase 4, reach: encrypted state-remote sync, wrapper shims, Gemini,
-  research workers, optional vector search.
+  per-worker `allowed_domains`, enforced risk tiers with agent-relayed
+  approval for `networked`, Claude worker after its authenticated retest.
+  Stretch goal (delivered): pluggable workers via the `harness` config key,
+  with local-model workers (`provider`/`model`, internet-free, local model
+  port only) verified end-to-end against a stand-in model server.
+  (Host-run mode and its `privileged` human-approval flow shipped in
+  Phases 1–2 but were removed 2026-07-16 as dead weight in pure-Docker use;
+  legacy events still parse.)
+- Phases 1 and 2 complete the product (decided 2026-07-16). Remaining work
+  is additive configuration, not new phases: new workers (e.g. Gemini for
+  research) land as config entries plus a worker Dockerfile, using the
+  existing pluggable `harness` mechanism.
+
+Cut from scope (2026-07-16), recorded so they are not reopened
+opportunistically:
+
+- Phase 3 (knowledge layer) in both its original and slim forms: task
+  summaries, memory files, text search, LLM extraction. Rationale: the user
+  runs a personal assistant hub (Hermes/OpenClaw) as the daily knowledge
+  layer; it queries Taskrunner's audit trail through `lookup-task`, which
+  already covers failure investigation and later lookup. A memory layer here
+  would be a second knowledge garden.
+- Phase 4 (reach): encrypted state-remote sync, wrapper shims, research
+  worker containers as a distinct feature, vector search. The retained audit
+  trail means any of these can be revisited later without rework, but none
+  is planned.
 
 ## Supporting Documents
 

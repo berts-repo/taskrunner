@@ -2,8 +2,7 @@ import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ClaudeHarness } from "../../src/workers/claude.js";
 import type { WorkerEvent } from "../../src/workers/harness.js";
-import { HostRunner } from "../../src/workers/runner.js";
-import { tempDir } from "../helpers.js";
+import { LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeClaude } from "./fake-claude.js";
 
 // realpath matters: the fake claude reports file_path from its resolved cwd
@@ -17,8 +16,8 @@ function collect() {
   return { events, onEvent: (e: WorkerEvent) => events.push(e) };
 }
 
-function fakeRunner(workspace: string): HostRunner {
-  return new HostRunner(workspace, writeFakeClaude());
+function fakeRunner(workspace: string): LocalRunner {
+  return new LocalRunner(workspace, writeFakeClaude());
 }
 
 describe("ClaudeHarness", () => {

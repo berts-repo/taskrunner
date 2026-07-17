@@ -99,14 +99,6 @@ export function createMcpServer(ctx: ToolContext): McpServer {
           "Set true only after the user explicitly said yes to the extra network " +
             "access in this conversation; the approval is recorded as relayed by you.",
         ),
-      runtime: z
-        .enum(["docker", "host"])
-        .optional()
-        .describe(
-          "Where the worker runs. Default comes from config (docker). 'host' runs " +
-            "unsandboxed and is privileged: the task waits for the human to run " +
-            "taskrunner approve.",
-        ),
       metadata: z
         .record(z.unknown())
         .optional()
@@ -121,7 +113,6 @@ export function createMcpServer(ctx: ToolContext): McpServer {
           sessionId: ctx.sessionId,
           wait: args.wait ?? false,
           ...(args.allowDomains ? { allowDomains: args.allowDomains } : {}),
-          ...(args.runtime ? { runtime: args.runtime } : {}),
           ...(args.userApproved !== undefined ? { userApproved: args.userApproved } : {}),
         }),
       ),

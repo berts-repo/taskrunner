@@ -6,10 +6,6 @@ import { z } from "zod";
 // tracked in docs/specs/NAMING.md; keep this schema minimal.
 
 const workerSchema = z.object({
-  /** Host-runtime command override (e.g. a codex binary path). */
-  command: z.string().optional(),
-  /** Where worker processes run; host is privileged and needs approval. */
-  runtime: z.enum(["docker", "host"]).default("docker"),
   /**
    * Which harness code drives this worker. Defaults to the worker's own
    * name, so `[worker.codex]` needs nothing; a custom worker names the loop

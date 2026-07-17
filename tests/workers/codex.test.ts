@@ -2,8 +2,8 @@ import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { CodexHarness } from "../../src/workers/codex.js";
 import type { WorkerEvent } from "../../src/workers/harness.js";
-import { HostRunner, type WorkerRunner, type WorkerSpawnSpec } from "../../src/workers/runner.js";
-import { tempDir } from "../helpers.js";
+import type { WorkerRunner, WorkerSpawnSpec } from "../../src/workers/runner.js";
+import { LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeCodex } from "./fake-codex.js";
 
 function collect() {
@@ -11,9 +11,9 @@ function collect() {
   return { events, onEvent: (e: WorkerEvent) => events.push(e) };
 }
 
-/** Host runner whose command override points at the fake codex script. */
-function fakeRunner(workspace: string): HostRunner {
-  return new HostRunner(workspace, writeFakeCodex());
+/** Local runner whose command override points at the fake codex script. */
+function fakeRunner(workspace: string): LocalRunner {
+  return new LocalRunner(workspace, writeFakeCodex());
 }
 
 describe("CodexHarness", () => {
@@ -147,7 +147,7 @@ describe("CodexHarness", () => {
     await expect(
       harness.runTurn({
         workspaceDir: workspace,
-        runner: new HostRunner(workspace, "/nonexistent/codex-binary"),
+        runner: new LocalRunner(workspace, "/nonexistent/codex-binary"),
         prompt: "x",
         signal: new AbortController().signal,
         onEvent,

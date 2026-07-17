@@ -8,9 +8,8 @@ import { ArtifactStore } from "../../src/storage/artifacts.js";
 import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
-import { HostRunner } from "../../src/workers/runner.js";
-import { WorktreeWorkspaces } from "../../src/workspace/worktree.js";
-import { tempDir } from "../helpers.js";
+import { CloneWorkspaces } from "../../src/workspace/clone.js";
+import { LocalRunner, tempDir } from "../helpers.js";
 import { writeFakeCodex } from "./fake-codex.js";
 
 function initRepo(): string {
@@ -37,20 +36,20 @@ function makeStack(codexCommand: string) {
   };
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const workspacesDir = join(root, "workspaces");
-  const worktrees = new WorktreeWorkspaces(workspacesDir, artifacts, record);
+  const clones = new CloneWorkspaces(workspacesDir, artifacts, record);
   const scheduler = new Scheduler({
     config: parseConfig({}),
     index,
     record,
     harnesses: new Map([["codex", new CodexHarness()]]),
-    workspaces: () => worktrees,
-    makeRunner: (ctx) => new HostRunner(ctx.workspaceDir, codexCommand),
+    workspaces: clones,
+    makeRunner: (ctx) => new LocalRunner(ctx.workspaceDir, codexCommand),
     artifacts,
   });
   return { scheduler, index, workspacesDir };
 }
 
-describe("scheduler + worktree + codex harness", () => {
+describe("scheduler + clone workspace + codex harness", () => {
   it("delegates, edits in the task workspace, resumes the same thread", async () => {
     const repo = initRepo();
     const { scheduler, index, workspacesDir } = makeStack(writeFakeCodex());

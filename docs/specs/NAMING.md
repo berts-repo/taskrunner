@@ -19,7 +19,7 @@ be reviewed before implementation.
 - Session/task/run/job/thread terminology
 - Worker/backend/provider/agent terminology
 - Client/integration/configured capability terminology
-- Artifact/rule/memory terminology
+- Artifact/rule terminology
 - Risk tier names
 
 ## Approved Terms
@@ -31,8 +31,7 @@ be reviewed before implementation.
 - Durable client interaction record: session
 - Execution runtime: worker
 - Worker integration code: worker harness
-- Per-task isolated git copy (worktree on host, clone in Docker): task
-  workspace
+- Per-task isolated git copy (a task-local clone): task workspace
 - Stored output: artifact
 - Optional client or worker setup unit: integration
 - Enabled client or worker support: configured capability
@@ -67,17 +66,14 @@ be reviewed before implementation.
   - Global TOML config: `config.toml`
 - CLI commands: `taskrunner up`, `taskrunner down`, `taskrunner status`,
   `taskrunner mcp`
-- Privileged-approval CLI commands: `taskrunner approve <task_id>`,
-  `taskrunner deny <task_id>`
-- Risk tier names: `read-only`, `workspace-write`, `networked`, `privileged`
+- Risk tier names: `read-only`, `workspace-write`, `networked`
 - Egress-filtering component: egress proxy
 - Egress config section: `[egress]`
 - Per-worker egress allowlist key: `allowed_domains`
 - Task workspace git branch: `taskrunner/<task_id>`
 - Record ID shape: prefixed lowercase ULIDs (`task_…`, `turn_…`, `sess_…`,
   `art_…`, `evt_…`, `proj_…`)
-- Initial global config keys: `[daemon]`, `[task] turn_timeout_seconds`,
-  `[worker.codex] command`
+- Initial global config keys: `[daemon]`, `[task] turn_timeout_seconds`
 - Planning-docs directory: `docs/specs/`
 - State root override flag: `--state-root <dir>`
 - State root override env var: `TASKRUNNER_STATE_ROOT`
@@ -97,14 +93,13 @@ be reviewed before implementation.
   - Per-turn Docker resource name prefixes: network
     `taskrunner-egress-<turn_id>`, containers `taskrunner-proxy-<turn_id>`
     and `taskrunner-worker-<turn_id>`
-  - Config keys under `[worker.<name>]`: `runtime` (`"docker"` | `"host"`),
-    `image`, `auth_volume`; worker section `[worker.claude]`; egress key
-    `[egress] proxy_image`
-  - `assign-task` tool arguments: `allowDomains`, `userApproved`, `runtime`
+  - Config keys under `[worker.<name>]`: `image`, `auth_volume`; worker
+    section `[worker.claude]`; egress key `[egress] proxy_image`
+  - `assign-task` tool arguments: `allowDomains`, `userApproved`
   - Second worker name: `claude`
   - Audit event kinds for egress decisions: `egress.allowed`, `egress.refused`
-  - Approval state values (in tool output and index): `none`, `pending`,
-    `approved`, `denied`
+  - Approval state values (in tool output and index): `none`, `approved`,
+    `denied`
   - Approval record ID prefix: `appr_`
   - Approval origin values (`via` on approval records): `agent`, `human`
   - npm script for building the Docker images: `build:images`
@@ -177,6 +172,12 @@ be reviewed before implementation.
   - `task.start`, `task.continue`, `task.lookup`
   - `dispatch.start`, `dispatch.continue`, `dispatch.lookup`
   - underscore-separated tool names such as `assign_task`
+- Retired with the host-run cut (2026-07-16; still parsed in legacy events):
+  - Risk tier `privileged`
+  - Approval state `pending`
+  - CLI commands `taskrunner approve <task_id>`, `taskrunner deny <task_id>`
+  - Config keys `[worker.<name>] runtime`, `[worker.<name>] command`
+  - `assign-task` tool argument `runtime`
 
 ## Notes
 

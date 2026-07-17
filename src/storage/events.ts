@@ -39,15 +39,17 @@ const taskCreated = z.object({
   session_id: z.string().optional(),
   worker: z.string(),
   prompt_summary: z.string(),
-  // Phase 2 policy fields; absent on Phase 1 records (docker/workspace-write
+  // Policy fields; absent on Phase 1 records (docker/workspace-write
   // equivalents did not exist yet, so readers must not assume defaults).
   tier: z.string().optional(),
+  // Legacy (removed host-run flow): never emitted anymore, kept so old logs
+  // still parse — readEvents stops at the first unparseable line.
   runtime: z.string().optional(),
   allow_domains: z.array(z.string()).optional(),
 });
 
-// A privileged task waits for a human decision; the first-turn prompt is
-// carried here so `taskrunner approve` can start the turn later.
+// Legacy (removed host-run flow): never emitted anymore, kept so old logs
+// still parse.
 const approvalRequested = z.object({
   type: z.literal("approval.requested"),
   task_id: z.string(),
@@ -60,7 +62,7 @@ const approvalRecorded = z.object({
   approval_id: z.string(),
   task_id: z.string(),
   decision: z.enum(["approved", "denied"]),
-  /** agent = relayed in-conversation; human = taskrunner approve/deny CLI. */
+  /** agent = relayed in-conversation; human = legacy approve/deny CLI. */
   via: z.enum(["agent", "human"]),
   domains: z.array(z.string()).optional(),
   session_id: z.string().optional(),

@@ -16,7 +16,6 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:e2e": "tsx scripts/verify-e2e.ts",
     "build:images": "sh scripts/build-images.sh"
   },
   "dependencies": {

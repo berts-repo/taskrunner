@@ -1,7 +1,7 @@
 import { newId } from "../ids.js";
 import { workerConfig, type Config } from "../config.js";
 import { ToolError } from "../domain/errors.js";
-import { resolveTier, type RiskTier, type WorkerRuntime } from "../domain/policy.js";
+import { resolveTier } from "../domain/policy.js";
 import { resolveProject } from "../domain/projects.js";
 import {
   getTaskSnapshot,
@@ -35,7 +35,7 @@ export interface WorkspaceChanges {
   changedFiles: string[];
 }
 
-/** Provides the per-task isolated workspace (worktree on host, clone for Docker). */
+/** Provides the per-task isolated workspace (a task-local clone). */
 export interface WorkspaceProvider {
   ensureWorkspace(taskId: string, projectRoot: string): Promise<string>;
   /** Optional git-based fallback when the harness reports nothing. */
@@ -52,7 +52,6 @@ export class ProjectRootWorkspaces implements WorkspaceProvider {
 
 /** Everything the runner factory needs to place one turn's worker process. */
 export interface RunnerContext {
-  runtime: WorkerRuntime;
   worker: string;
   workspaceDir: string;
   taskId: string;
@@ -66,7 +65,7 @@ export interface SchedulerDeps {
   index: StateIndex;
   record: (body: EventBody) => LogEvent;
   harnesses: Map<string, WorkerHarness>;
-  workspaces: (runtime: WorkerRuntime) => WorkspaceProvider;
+  workspaces: WorkspaceProvider;
   makeRunner: (ctx: RunnerContext) => WorkerRunner;
   artifacts: ArtifactStore;
 }
@@ -83,9 +82,8 @@ interface RunningTurn {
 /**
  * Turn lifecycle owner (PLAN § Async delegation contract, § Risk tiers and
  * default policy): assign/continue return immediately with a running status
- * unless `wait`; one running turn per task; every turn has a timeout; risk
- * tiers gate what runs — networked needs a relayed user approval, privileged
- * waits for a human `taskrunner approve`.
+ * unless `wait`; one running turn per task; every turn has a timeout;
+ * networked tasks need a relayed user approval before they run.
  */
 export class Scheduler {
   private readonly running = new Map<string, RunningTurn>();
@@ -99,14 +97,12 @@ export class Scheduler {
     sessionId?: string;
     wait?: boolean;
     allowDomains?: string[];
-    runtime?: WorkerRuntime;
     userApproved?: boolean;
   }): Promise<TurnOutcome> {
     const harness = this.harnessFor(args.worker);
     if (!args.prompt.trim()) throw new ToolError("invalid_request", "prompt must not be empty");
     const allowDomains = args.allowDomains ?? [];
-    const runtime = args.runtime ?? workerConfig(this.deps.config, args.worker).runtime;
-    const tier = resolveTier(runtime, allowDomains);
+    const tier = resolveTier(allowDomains);
 
     if (tier === "networked" && !args.userApproved) {
       throw new ToolError(
@@ -126,7 +122,6 @@ export class Scheduler {
       worker: args.worker,
       prompt_summary: summarize(args.prompt),
       tier,
-      runtime,
       ...(allowDomains.length > 0 ? { allow_domains: allowDomains } : {}),
     });
 
@@ -141,12 +136,6 @@ export class Scheduler {
         domains: allowDomains,
         ...(args.sessionId ? { session_id: args.sessionId } : {}),
       });
-    }
-
-    if (tier === "privileged") {
-      // Only a human decision starts this task; the prompt waits with it.
-      this.deps.record({ type: "approval.requested", task_id: taskId, tier, prompt: args.prompt });
-      return this.outcome(taskId);
     }
 
     return this.startTurn(taskId, project.root, harness, args.prompt, args.wait ?? false);
@@ -165,7 +154,13 @@ export class Scheduler {
       );
     }
     if (!args.prompt.trim()) throw new ToolError("invalid_request", "prompt must not be empty");
-    this.requireApproved(snapshot);
+    // Legacy state: tasks denied under the removed human-approval flow stay denied.
+    if (snapshot.approval_state === "denied") {
+      throw new ToolError(
+        "policy_denied",
+        `task ${snapshot.task_id} was denied by the user and cannot run`,
+      );
+    }
     const harness = this.harnessFor(snapshot.worker);
     return this.startTurn(
       args.task_id,
@@ -174,47 +169,6 @@ export class Scheduler {
       args.prompt,
       args.wait ?? false,
     );
-  }
-
-  /** Human decision via `taskrunner approve`; starts the waiting first turn. */
-  async approveTask(taskId: string): Promise<TurnOutcome> {
-    const snapshot = this.snapshotFor(taskId);
-    if (snapshot.approval_state !== "pending") {
-      throw new ToolError(
-        "invalid_request",
-        `task ${taskId} has no pending approval (state: ${snapshot.approval_state})`,
-      );
-    }
-    const prompt = snapshot.pending_prompt;
-    this.deps.record({
-      type: "approval.recorded",
-      approval_id: newId("appr"),
-      task_id: taskId,
-      decision: "approved",
-      via: "human",
-    });
-    if (!prompt) return this.outcome(taskId);
-    const harness = this.harnessFor(snapshot.worker);
-    return this.startTurn(taskId, snapshot.project_root, harness, prompt, false);
-  }
-
-  /** Human denial via `taskrunner deny`; the task never runs. */
-  async denyTask(taskId: string): Promise<TurnOutcome> {
-    const snapshot = this.snapshotFor(taskId);
-    if (snapshot.approval_state !== "pending") {
-      throw new ToolError(
-        "invalid_request",
-        `task ${taskId} has no pending approval (state: ${snapshot.approval_state})`,
-      );
-    }
-    this.deps.record({
-      type: "approval.recorded",
-      approval_id: newId("appr"),
-      task_id: taskId,
-      decision: "denied",
-      via: "human",
-    });
-    return this.outcome(taskId);
   }
 
   async cancelTask(args: { task_id: string; reason?: string }): Promise<{
@@ -258,23 +212,6 @@ export class Scheduler {
     const snapshot = getTaskSnapshot(this.deps.index, taskId);
     if (!snapshot) throw new ToolError("not_found", `no task ${taskId}`);
     return snapshot;
-  }
-
-  /** Enforces the task's approval state before any further turn runs. */
-  private requireApproved(snapshot: TaskSnapshot): void {
-    if (snapshot.approval_state === "pending") {
-      throw new ToolError(
-        "approval_required",
-        `task ${snapshot.task_id} is ${snapshot.tier} and waits for a human decision: ` +
-          `taskrunner approve ${snapshot.task_id} (or taskrunner deny ${snapshot.task_id})`,
-      );
-    }
-    if (snapshot.approval_state === "denied") {
-      throw new ToolError(
-        "policy_denied",
-        `task ${snapshot.task_id} was denied by the user and cannot run`,
-      );
-    }
   }
 
   private harnessFor(worker: string): WorkerHarness {
@@ -329,8 +266,7 @@ export class Scheduler {
     let runner: WorkerRunner | undefined;
     try {
       const snapshot = this.snapshotFor(taskId);
-      const runtime = (snapshot.runtime ?? "docker") as WorkerRuntime;
-      const workspaces = this.deps.workspaces(runtime);
+      const workspaces = this.deps.workspaces;
       const workspaceDir = await workspaces.ensureWorkspace(taskId, projectRoot);
       const previousNativeId = snapshot.worker_session_id ?? undefined;
 
@@ -338,7 +274,6 @@ export class Scheduler {
       const approvedDomains =
         snapshot.approval_state === "approved" ? snapshot.allow_domains : [];
       runner = this.deps.makeRunner({
-        runtime,
         worker: snapshot.worker,
         workspaceDir,
         taskId,
