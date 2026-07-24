@@ -31,6 +31,7 @@ describe("MCP tool surface", () => {
     daemon = await Daemon.start(paths, {
       harnesses: new Map([["fake", new FakeHarness()]]),
       workspaces: new ProjectRootWorkspaces(),
+      ingestSources: [],
     });
     client = new Client({ name: "tools-test", version: "0.0.1" });
     await client.connect(

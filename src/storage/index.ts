@@ -8,7 +8,7 @@ import type { LogEvent } from "./events.js";
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE projects (
@@ -81,6 +81,19 @@ CREATE TABLE audit_events (
 );
 CREATE INDEX audit_events_task ON audit_events(task_id, ts);
 CREATE INDEX audit_events_turn ON audit_events(turn_id, ts);
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  native_session_id TEXT NOT NULL,
+  native_record_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  native_ts TEXT,
+  project_path TEXT,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX messages_session ON messages(source, native_session_id);
 CREATE TABLE artifacts (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -234,6 +247,25 @@ export class StateIndex {
           event.task_id,
           event.worker,
           event.native_session_id,
+          event.ts,
+        );
+        break;
+      case "message.recorded":
+        db.prepare(
+          `INSERT OR IGNORE INTO messages
+             (id, source, native_session_id, native_record_id, role, kind,
+              content, native_ts, project_path, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          event.message_id,
+          event.source,
+          event.native_session_id,
+          event.native_record_id,
+          event.role,
+          event.kind,
+          event.content,
+          event.native_ts ?? null,
+          event.project_path ?? null,
           event.ts,
         );
         break;

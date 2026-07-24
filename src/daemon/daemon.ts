@@ -4,6 +4,7 @@ import * as http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { loadConfig, workerConfig, type Config, type WorkerConfig } from "../config.js";
 import { newId } from "../ids.js";
+import { TranscriptSweeper, type IngestSource } from "../ingest/sweep.js";
 import type { StatePaths } from "../paths.js";
 import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
@@ -23,6 +24,11 @@ export interface DaemonOptions {
   workspaces?: WorkspaceProvider;
   /** Test seam: replaces the Docker runner factory. */
   makeRunner?: (ctx: RunnerContext) => WorkerRunner;
+  /**
+   * Test seam: overrides the config-derived transcript sources. Pass `[]` to
+   * keep the startup sweep from touching real host transcript directories.
+   */
+  ingestSources?: IngestSource[];
 }
 
 // Workers are pluggable: a worker is a config entry,
@@ -38,7 +44,7 @@ const HARNESS_KINDS: Record<string, (cfg: WorkerConfig) => WorkerHarness> = {
 };
 
 /** Container mounts for each harness kind's auth material. */
-const AUTH_MOUNTS: Record<string, AuthMount[]> = {
+export const AUTH_MOUNTS: Record<string, AuthMount[]> = {
   // codex keeps everything under ~/.codex.
   codex: [{ containerPath: "/home/worker/.codex" }],
   // claude spreads login state across the home directory, but only these two
@@ -55,10 +61,18 @@ const AUTH_MOUNTS: Record<string, AuthMount[]> = {
 };
 
 /** Image fallback so config-only workers need no image key. */
-const DEFAULT_IMAGES: Record<string, string> = {
+export const DEFAULT_IMAGES: Record<string, string> = {
   codex: "taskrunner/codex-worker",
   claude: "taskrunner/claude-worker",
 };
+
+/** Resolves the configured transcript sources into sweeper inputs. */
+export function ingestSources(config: Config): IngestSource[] {
+  return Object.values(config.ingest.sources).map((source) => ({
+    format: source.format,
+    dirs: source.dirs,
+  }));
+}
 
 /** One harness instance per configured worker, driven purely by config. */
 export function buildHarnesses(config: Config): Map<string, WorkerHarness> {
@@ -93,6 +107,7 @@ interface McpSession {
 export class Daemon {
   private readonly sessions = new Map<string, McpSession>();
   private stopped = false;
+  private sweepTimer: NodeJS.Timeout | undefined;
 
   private constructor(
     readonly paths: StatePaths,
@@ -102,6 +117,7 @@ export class Daemon {
     readonly artifacts: ArtifactStore,
     private readonly server: http.Server,
     readonly scheduler: Scheduler,
+    readonly sweeper: TranscriptSweeper,
   ) {}
 
   static async start(paths: StatePaths, options: DaemonOptions = {}): Promise<Daemon> {
@@ -123,6 +139,7 @@ export class Daemon {
       const artifacts = new ArtifactStore(paths.artifactsDir);
       const server = http.createServer();
       let record!: (body: EventBody) => LogEvent;
+      let recordBulk!: (body: EventBody) => LogEvent;
       // Turns run in self-contained clones the container can mount safely.
       const clones = new CloneWorkspaces(paths.workspacesDir, artifacts, (b) => record(b));
       const makeRunner = (ctx: RunnerContext): WorkerRunner => {
@@ -165,8 +182,25 @@ export class Daemon {
         makeRunner: options.makeRunner ?? makeRunner,
         artifacts,
       });
-      const daemon = new Daemon(paths, config, log, index, artifacts, server, scheduler);
+      const sweeper = new TranscriptSweeper({
+        sources: options.ingestSources ?? ingestSources(config),
+        index,
+        record: (body) => recordBulk(body),
+        flush: () => log.flush(),
+        stateFile: paths.ingestStateFile,
+      });
+      const daemon = new Daemon(
+        paths,
+        config,
+        log,
+        index,
+        artifacts,
+        server,
+        scheduler,
+        sweeper,
+      );
       record = (body) => daemon.record(body);
+      recordBulk = (body) => daemon.recordBulk(body);
 
       daemon.recoverCrashedTurns();
       server.on("request", (req, res) => {
@@ -181,6 +215,9 @@ export class Daemon {
         server.once("error", reject);
         server.listen(paths.socketPath, () => resolve());
       });
+      // Only once the socket is accepting: the first backfill can run for
+      // minutes, and shims give the daemon a bounded window to become ready.
+      daemon.startSweeping();
       return daemon;
     } catch (err) {
       releaseLock(paths);
@@ -193,6 +230,35 @@ export class Daemon {
     const event = this.log.append(body);
     this.index.apply(event);
     return event;
+  }
+
+  /**
+   * Bulk write path for reconstructible events. Skips the per-record fsync
+   * that dominates a transcript backfill; the caller flushes before it
+   * persists anything that depends on these records being durable.
+   */
+  private recordBulk(body: EventBody): LogEvent {
+    const event = this.log.append(body, { sync: false });
+    this.index.apply(event);
+    return event;
+  }
+
+  /**
+   * Sweeps host transcripts into the event log once on startup (this is where
+   * the historical backfill lands) and then on the configured interval. Sweep
+   * failures are logged, never fatal — the daemon must keep serving.
+   */
+  private startSweeping(): void {
+    const runSweep = () => {
+      this.sweeper.sweep().catch((err: Error) => {
+        process.stderr.write(`taskrunner: transcript sweep failed: ${err.message}\n`);
+      });
+    };
+    runSweep();
+    const intervalMs = this.config.ingest.interval_seconds * 1000;
+    this.sweepTimer = setInterval(runSweep, intervalMs);
+    // Don't keep the process alive solely for the sweep timer.
+    this.sweepTimer.unref();
   }
 
   /** Turns left `running` by a crash are failed with their audit retained. */
@@ -317,6 +383,10 @@ export class Daemon {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    // Stop new sweeps and let any in-flight sweep finish appending before the
+    // log closes.
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    await this.sweeper.settle();
     // Cancel running turns first so their terminal events land in the log
     // before it closes.
     await this.scheduler.shutdown();

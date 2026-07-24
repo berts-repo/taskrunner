@@ -20,7 +20,8 @@ function unixFetch(socketPath: string): typeof fetch {
 const daemons: Daemon[] = [];
 
 async function startDaemon(root: string, options: DaemonOptions = {}): Promise<Daemon> {
-  const daemon = await Daemon.start(statePaths(root), options);
+  // Default off: tests must never sweep the developer's real host transcripts.
+  const daemon = await Daemon.start(statePaths(root), { ingestSources: [], ...options });
   daemons.push(daemon);
   return daemon;
 }
@@ -32,7 +33,7 @@ afterEach(async () => {
 describe("Daemon", () => {
   it("serves /status on the unix socket and cleans up on stop", async () => {
     const paths = statePaths(tempDir("daemon"));
-    const daemon = await Daemon.start(paths);
+    const daemon = await Daemon.start(paths, { ingestSources: [] });
     daemons.push(daemon);
 
     const res = await unixFetch(paths.socketPath)("http://taskrunner/status");
@@ -50,12 +51,14 @@ describe("Daemon", () => {
   it("refuses a second daemon on the same state root", async () => {
     const root = tempDir("daemon");
     await startDaemon(root);
-    await expect(Daemon.start(statePaths(root))).rejects.toBeInstanceOf(AlreadyRunningError);
+    await expect(
+      Daemon.start(statePaths(root), { ingestSources: [] }),
+    ).rejects.toBeInstanceOf(AlreadyRunningError);
   });
 
   it("allows a restart after a clean stop", async () => {
     const root = tempDir("daemon");
-    const first = await Daemon.start(statePaths(root));
+    const first = await Daemon.start(statePaths(root), { ingestSources: [] });
     await first.stop();
     const second = await startDaemon(root);
     expect(second).toBeDefined();

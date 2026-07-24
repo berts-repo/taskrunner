@@ -24,6 +24,21 @@ const workerSchema = z.object({
 
 export type WorkerConfig = z.infer<typeof workerSchema>;
 
+// Transcript ingestion sources. Like workers, sources are pluggable: a
+// source is an [ingest.sources.<name>] entry whose `format` selects the
+// parser code (the built-ins claude-code/codex default their format to
+// their own name). Interval and sources live under one [ingest] section;
+// sources nest one level deeper so the scalar interval_seconds does not
+// collide with the source catchall.
+const ingestSourceSchema = z.object({
+  /** Parser format; a custom source names the parser it reuses. */
+  format: z.string(),
+  /** Directories to scan (recursively) for this source's transcripts. */
+  dirs: z.array(z.string()).default([]),
+});
+
+export type IngestSourceConfig = z.infer<typeof ingestSourceSchema>;
+
 const configSchema = z.object({
   task: z
     .object({
@@ -60,6 +75,31 @@ const configSchema = z.object({
   egress: z
     .object({
       proxy_image: z.string().default("taskrunner/egress-proxy"),
+    })
+    .default({}),
+  ingest: z
+    .object({
+      /** How often the daemon sweeps transcript sources into the event log. */
+      interval_seconds: z.number().int().positive().default(300),
+      sources: z
+        .object({
+          "claude-code": ingestSourceSchema
+            .extend({
+              format: z.string().default("claude-code"),
+              dirs: z.array(z.string()).default(["~/.claude/projects"]),
+            })
+            .default({}),
+          codex: ingestSourceSchema
+            .extend({
+              format: z.string().default("codex"),
+              dirs: z.array(z.string()).default(["~/.codex/sessions"]),
+            })
+            .default({}),
+        })
+        // Any other [ingest.sources.<name>] is parsed with the base schema
+        // and needs only a `format` key to come alive.
+        .catchall(ingestSourceSchema)
+        .default({}),
     })
     .default({}),
 });

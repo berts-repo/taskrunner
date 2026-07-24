@@ -52,6 +52,28 @@ with their egress defaults, the network-approval model, and the task
 lifecycle — so any client that honors instructions discovers what it can
 delegate and to whom.
 
+## Conversation archive
+
+Beyond the turns it runs itself, the daemon periodically sweeps the native
+transcripts of host coding agents (Claude Code under `~/.claude/projects`,
+Codex under `~/.codex/sessions`) into the same durable event log, one
+`message.recorded` event per conversation record, folded into a `messages`
+table. This makes `~/.taskrunner/events.jsonl` a permanent, queryable
+archive of agent conversations that outlives each tool's own retention —
+Claude Code, for instance, purges its transcripts after 30 days by default.
+
+The archive is ingest-only: native transcript files are never moved or
+modified (session resume depends on them), and re-sweeping is idempotent —
+message ids are a deterministic hash of `(source, session, record)`, so a
+record already archived is skipped before anything is appended. Byte offsets
+in `~/.taskrunner/ingest-state.json` are only a performance cache; deleting
+it forces a harmless full re-scan and the event log stays the sole source of
+truth. Sources are pluggable exactly like workers — an
+`[ingest.sources.<name>]` entry naming a `format` adds one, no code change.
+
+To stop Claude Code's 30-day purge so nothing is lost before the first
+sweep, raise `cleanupPeriodDays` in `~/.claude/settings.json`.
+
 ## Quick Start
 
 Requires Node 22+ and Docker.
@@ -64,8 +86,10 @@ claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js m
 ```
 
 The daemon starts on demand and keeps durable state under `~/.taskrunner/`.
-CLI: `taskrunner up | down | status | mcp` (`--state-root <dir>` overrides the
-state root).
+CLI: `taskrunner up | down | status | doctor | mcp` (`--state-root <dir>`
+overrides the state root). `taskrunner doctor` is a read-only preflight over
+Docker, worker images and auth volumes, the egress proxy image, and
+transcript-ingestion health — run it when a worker won't start.
 
 Tests: `npm test`. Live Codex delegation check (requires
 `codex login`): `TASKRUNNER_LIVE_CODEX=1 npx vitest run tests/workers/integration.test.ts`.
@@ -119,9 +143,18 @@ allowed_domains = ["api.openai.com", "auth.openai.com", "chatgpt.com", "*.chatgp
 
 [egress]
 proxy_image = "taskrunner/egress-proxy"
+
+[ingest]                      # host transcript archival (see below)
+interval_seconds = 300        # how often the daemon sweeps transcripts
+
+[ingest.sources.claude-code]  # built-in; [ingest.sources.codex] is analogous
+format = "claude-code"        # selects the parser
+dirs = ["~/.claude/projects"] # scanned recursively for *.jsonl transcripts
 ```
 
 Any other `[worker.<name>]` section defines a new worker — see below.
+Any other `[ingest.sources.<name>]` section adds a transcript source; it
+needs a `format` naming a built-in parser (`claude-code`, `codex`).
 
 ## Network access
 

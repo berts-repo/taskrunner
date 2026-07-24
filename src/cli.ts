@@ -3,26 +3,31 @@ import * as fs from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Agent, fetch as undiciFetch } from "undici";
 import { AlreadyRunningError, Daemon } from "./daemon/daemon.js";
+import { runDoctor } from "./doctor.js";
 import { statePaths, type StatePaths } from "./paths.js";
 import { runShim } from "./shim/proxy.js";
 import { VERSION } from "./version.js";
 
-const USAGE = `Usage: taskrunner <command> [--state-root <dir>]
+const USAGE = `Usage: taskrunner <command> [args] [--state-root <dir>]
 
 Commands:
   up      Start the Taskrunner daemon in the foreground.
   down    Stop the running daemon.
   status  Report daemon status.
+  doctor  Diagnose Docker, worker images/auth, and ingestion health.
   mcp     Run the stdio MCP shim (auto-starts the daemon).
 `;
 
 interface Args {
   command: string | undefined;
+  /** Positional arguments after the command (e.g. hub <agent>). */
+  rest: string[];
   paths: StatePaths;
 }
 
 function parseArgs(argv: string[]): Args {
   let command: string | undefined;
+  const rest: string[] = [];
   let root = process.env["TASKRUNNER_STATE_ROOT"];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -32,10 +37,10 @@ function parseArgs(argv: string[]): Args {
     } else if (command === undefined) {
       command = arg;
     } else {
-      throw new Error(`unexpected argument '${arg}'`);
+      rest.push(arg as string);
     }
   }
-  return { command, paths: root ? statePaths(root) : statePaths() };
+  return { command, rest, paths: root ? statePaths(root) : statePaths() };
 }
 
 async function up(paths: StatePaths): Promise<number> {
@@ -136,6 +141,8 @@ async function main(argv: string[]): Promise<number> {
       return down(args.paths);
     case "status":
       return status(args.paths);
+    case "doctor":
+      return runDoctor(args.paths);
     case "mcp":
       await runShim(args.paths);
       // The shim owns the process from here; it exits via its own shutdown.

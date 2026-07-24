@@ -116,6 +116,28 @@ const auditRecorded = z.object({
   payload: z.unknown(),
 });
 
+// A single conversation record swept out of a host/native agent transcript
+// (Claude Code, Codex, …). `message_id` is deterministic — a hash of
+// (source, native_session_id, native_record_id) — so re-sweeping the same
+// transcript record always yields the same id and the fold is idempotent.
+const messageRecorded = z.object({
+  type: z.literal("message.recorded"),
+  message_id: z.string(),
+  /** Transcript source, e.g. "claude-code" / "codex". Free-form: no reader
+   * may assume only the built-in sources exist. */
+  source: z.string(),
+  native_session_id: z.string(),
+  native_record_id: z.string(),
+  role: z.string(),
+  /** message | tool_use | tool_result | reasoning | system. */
+  kind: z.string(),
+  /** Plain text, or JSON-encoded structured blocks. */
+  content: z.string(),
+  /** The record's own timestamp, when the format carries one. */
+  native_ts: z.string().optional(),
+  project_path: z.string().optional(),
+});
+
 const artifactStored = z.object({
   type: z.literal("artifact.stored"),
   artifact_id: z.string(),
@@ -149,6 +171,7 @@ export const eventBodySchema = z.discriminatedUnion("type", [
   turnFailed,
   turnCanceled,
   workerSessionRecorded,
+  messageRecorded,
   auditRecorded,
   artifactStored,
   artifactLinked,
@@ -237,12 +260,26 @@ export class EventLog {
     return new EventLog(path, fs.openSync(path, "a"));
   }
 
-  /** Assigns id/ts, appends one fsynced JSONL line, returns the full event. */
-  append(body: EventBody): LogEvent {
+  /**
+   * Assigns id/ts, appends one JSONL line, returns the full event.
+   *
+   * Appends are fsynced by default: lifecycle records are authoritative, so
+   * losing one would strand a turn nothing else knows about. Bulk writers of
+   * *reconstructible* events (transcript ingest, whose source files are never
+   * modified) may pass `sync: false` and call `flush()` once at the end —
+   * fsync costs ~28ms per record, which dominates a large backfill. A torn
+   * tail from a crash is repaired on next open.
+   */
+  append(body: EventBody, options: { sync?: boolean } = {}): LogEvent {
     const event: LogEvent = { id: newId("evt"), ts: new Date().toISOString(), ...body };
     fs.writeSync(this.fd, JSON.stringify(event) + "\n");
-    fs.fsyncSync(this.fd);
+    if (options.sync !== false) fs.fsyncSync(this.fd);
     return event;
+  }
+
+  /** Forces every prior append durable, including unsynced ones. */
+  flush(): void {
+    fs.fsyncSync(this.fd);
   }
 
   close(): void {

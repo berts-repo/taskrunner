@@ -10,6 +10,7 @@ const TABLES = [
   "tasks",
   "turns",
   "worker_sessions",
+  "messages",
   "audit_events",
   "artifacts",
   "artifact_links",
@@ -108,6 +109,35 @@ describe("StateIndex", () => {
     expect(dump(rebuilt)).toEqual(dump(incremental));
     incremental.close();
     rebuilt.close();
+  });
+
+  it("folds message.recorded rows and dedupes by message id", () => {
+    const index = new StateIndex(":memory:");
+    const message = (id: string, content: string) =>
+      evt({
+        type: "message.recorded",
+        message_id: id,
+        source: "claude-code",
+        native_session_id: "s1",
+        native_record_id: id,
+        role: "user",
+        kind: "message",
+        content,
+        native_ts: "2026-01-01T00:00:00Z",
+        project_path: "/repo",
+      });
+    index.apply(message("msg_a", "hello"));
+    index.apply(message("msg_a", "hello again")); // duplicate id: ignored
+    index.apply(message("msg_b", "world"));
+
+    const rows = index.db
+      .prepare("SELECT id, content, source, native_session_id FROM messages ORDER BY id")
+      .all() as any[];
+    expect(rows).toEqual([
+      { id: "msg_a", content: "hello", source: "claude-code", native_session_id: "s1" },
+      { id: "msg_b", content: "world", source: "claude-code", native_session_id: "s1" },
+    ]);
+    index.close();
   });
 
   it("rebuild replaces an existing index file", () => {
