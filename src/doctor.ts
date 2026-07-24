@@ -183,16 +183,25 @@ function parseExpiry(text: string): number | undefined {
 
 function checkIngest(config: Config, paths: StatePaths, checks: Check[]): void {
   for (const source of ingestSources(config)) {
-    const present = source.dirs
-      .map(expandHome)
-      .filter((dir) => fs.existsSync(dir));
+    if (source.volume) {
+      // Volume sources are copied out via Docker at sweep time; presence is
+      // covered by the worker auth-volume check above, so just note the route.
+      checks.push({
+        level: "ok",
+        label: `ingest ${source.format} (volume)`,
+        detail: `${source.volume}/${source.subdir ?? ""}`,
+      });
+      continue;
+    }
+    const dirs = source.dirs ?? [];
+    const present = dirs.map(expandHome).filter((dir) => fs.existsSync(dir));
     checks.push({
       level: present.length > 0 ? "ok" : "warn",
       label: `ingest ${source.format}`,
       detail:
         present.length > 0
-          ? `${present.length}/${source.dirs.length} source dir(s) present`
-          : `no source dirs found (${source.dirs.join(", ")}); nothing to archive yet`,
+          ? `${present.length}/${dirs.length} source dir(s) present`
+          : `no source dirs found (${dirs.join(", ")}); nothing to archive yet`,
     });
   }
   if (fs.existsSync(paths.ingestStateFile)) {

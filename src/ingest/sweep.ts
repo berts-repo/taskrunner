@@ -16,10 +16,19 @@ import { parserForFormat } from "./registry.js";
 // full re-scan that dedupe makes harmless, and the event log stays the sole
 // source of truth for the index.
 
-/** One transcript source: a parser format and the dirs to scan for it. */
+/**
+ * One transcript source for a given parser format. Either a set of host
+ * `dirs` (scanned directly), or a Docker `volume`+`subdir` whose subtree is
+ * copied to staging first (worker/hub auth volumes, which the host cannot
+ * mount on macOS). `image` names the already-built worker image used as the
+ * copy-out vehicle.
+ */
 export interface IngestSource {
   format: string;
-  dirs: string[];
+  dirs?: string[];
+  volume?: string;
+  subdir?: string;
+  image?: string;
 }
 
 /** Per-file resume state persisted in the sidecar. */
@@ -49,6 +58,12 @@ interface SweeperDeps {
   flush: () => void;
   /** Sidecar path, e.g. <state root>/ingest-state.json. */
   stateFile: string;
+  /** Base dir for volume copy-outs, e.g. <state root>/ingest-staging. */
+  stagingDir?: string;
+  /** Copies a volume subtree to a host dir; injected so the core stays
+   * Docker-agnostic and unit-testable. Required for volume sources. Async so
+   * the copy-out never blocks the event loop the daemon serves on. */
+  copyVolume?: (volume: string, subdir: string, image: string, destDir: string) => Promise<void>;
   /** Diagnostics sink; defaults to stderr. */
   onLog?: (message: string) => void;
 }
@@ -107,7 +122,16 @@ export class TranscriptSweeper {
         this.log(`ingest: no parser for format '${source.format}', skipping`);
         continue;
       }
-      const dirs = source.dirs.map(expandHome);
+      let dirs: string[];
+      try {
+        dirs = await this.resolveDirs(source);
+      } catch (err) {
+        // Copy-out failure (Docker down, missing volume): skip this source,
+        // leave the others untouched.
+        stats.errors += 1;
+        this.log(`ingest: ${source.volume ?? source.format}: ${(err as Error).message}`);
+        continue;
+      }
       for (const file of parser.enumerate(dirs)) {
         try {
           stats.recorded += await this.sweepFile(parser, source.format, file, state);
@@ -125,6 +149,26 @@ export class TranscriptSweeper {
     this.deps.flush();
     this.saveState(state);
     return stats;
+  }
+
+  /**
+   * The host directories to scan for a source. A volume source is first
+   * copied out to a per-volume staging dir (whose stable path lets the offset
+   * cache stay incremental across copies); a host source scans its dirs
+   * directly. Throws if a volume source cannot be resolved.
+   */
+  private async resolveDirs(source: IngestSource): Promise<string[]> {
+    if (!source.volume) return (source.dirs ?? []).map(expandHome);
+    if (!this.deps.copyVolume || !this.deps.stagingDir) {
+      throw new Error("volume source configured but no copy-out available");
+    }
+    // An empty subdir would copy the volume *root*, and a worker auth volume
+    // holds that worker's credentials. Refuse rather than stage secrets.
+    if (!source.subdir) throw new Error(`volume source ${source.volume} has no subdir`);
+    if (!source.image) throw new Error(`volume source ${source.volume} has no image`);
+    const dest = join(this.deps.stagingDir, source.volume);
+    await this.deps.copyVolume(source.volume, source.subdir, source.image, dest);
+    return [dest];
   }
 
   /** Reads new complete lines from one file and records unseen messages. */

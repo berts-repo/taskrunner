@@ -30,12 +30,23 @@ export type WorkerConfig = z.infer<typeof workerSchema>;
 // their own name). Interval and sources live under one [ingest] section;
 // sources nest one level deeper so the scalar interval_seconds does not
 // collide with the source catchall.
-const ingestSourceSchema = z.object({
-  /** Parser format; a custom source names the parser it reuses. */
-  format: z.string(),
-  /** Directories to scan (recursively) for this source's transcripts. */
-  dirs: z.array(z.string()).default([]),
-});
+// A source here is always a set of *host* directories. Worker transcripts
+// living inside Docker auth volumes are not configured: they are derived from
+// each worker's own `auth_volume` and `image` (see ingestSources), so the
+// volume name, the image used to reach into it, and the per-harness subdir
+// can never drift out of agreement with the worker they belong to.
+//
+// Strict on purpose: an unknown key here — a stray `volume`, a `dir` typo —
+// would otherwise be dropped in silence, and a source that silently ingests
+// nothing is worse than one that refuses to load.
+const ingestSourceSchema = z
+  .object({
+    /** Parser format; a custom source names the parser it reuses. */
+    format: z.string(),
+    /** Host directories to scan (recursively) for this source's transcripts. */
+    dirs: z.array(z.string()).default([]),
+  })
+  .strict();
 
 export type IngestSourceConfig = z.infer<typeof ingestSourceSchema>;
 

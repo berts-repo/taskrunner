@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { loadConfig, workerConfig, type Config, type WorkerConfig } from "../config.js";
 import { newId } from "../ids.js";
 import { TranscriptSweeper, type IngestSource } from "../ingest/sweep.js";
+import { dockerCopyOut } from "../ingest/volume.js";
 import type { StatePaths } from "../paths.js";
 import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
@@ -66,12 +67,51 @@ export const DEFAULT_IMAGES: Record<string, string> = {
   claude: "taskrunner/claude-worker",
 };
 
-/** Resolves the configured transcript sources into sweeper inputs. */
+// Where each harness kind keeps its native transcripts inside its auth
+// volume, and which parser format reads them. Keyed on harness kind (as with
+// AUTH_MOUNTS/DEFAULT_IMAGES) so config-only workers inherit their loop's
+// layout. Verified against AUTH_MOUNTS: the codex volume root is ~/.codex,
+// the claude volume root is the worker home.
+const TRANSCRIPT_SUBDIR: Record<string, string> = {
+  codex: "sessions",
+  claude: ".claude/projects",
+};
+const TRANSCRIPT_FORMAT: Record<string, string> = {
+  codex: "codex",
+  claude: "claude-code",
+};
+
+/**
+ * Resolves the transcript sources the sweeper ingests: the configured host
+ * sources, plus one derived volume source per worker that has an auth volume
+ * and a known transcript layout.
+ *
+ * Volume sources are derived rather than configured. Reaching into a volume
+ * needs a container to mount it in, and the only image guaranteed to exist
+ * for a given auth volume is the worker's own — so taking the volume, the
+ * image and the subdir from one worker entry keeps them in agreement by
+ * construction, and leaves nothing for a config file to get wrong.
+ */
 export function ingestSources(config: Config): IngestSource[] {
-  return Object.values(config.ingest.sources).map((source) => ({
+  const sources: IngestSource[] = Object.values(config.ingest.sources).map((source) => ({
     format: source.format,
     dirs: source.dirs,
   }));
+  const seenVolumes = new Set<string>();
+  for (const name of new Set(["codex", "claude", ...Object.keys(config.worker)])) {
+    const cfg = workerConfig(config, name);
+    const kind = cfg.harness ?? name;
+    const subdir = TRANSCRIPT_SUBDIR[kind];
+    const format = TRANSCRIPT_FORMAT[kind];
+    const image = cfg.image ?? DEFAULT_IMAGES[kind];
+    // Two workers may share an auth volume (same harness, different model);
+    // ingesting it once is enough.
+    if (!cfg.auth_volume || !subdir || !format || !image) continue;
+    if (seenVolumes.has(cfg.auth_volume)) continue;
+    seenVolumes.add(cfg.auth_volume);
+    sources.push({ format, volume: cfg.auth_volume, subdir, image });
+  }
+  return sources;
 }
 
 /** One harness instance per configured worker, driven purely by config. */
@@ -188,6 +228,9 @@ export class Daemon {
         record: (body) => recordBulk(body),
         flush: () => log.flush(),
         stateFile: paths.ingestStateFile,
+        stagingDir: paths.ingestStagingDir,
+        copyVolume: (volume, subdir, image, destDir) =>
+          dockerCopyOut(volume, subdir, destDir, image),
       });
       const daemon = new Daemon(
         paths,

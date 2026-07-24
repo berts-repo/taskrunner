@@ -12,6 +12,7 @@ export interface StatePaths {
   logsDir: string;
   configFile: string;
   ingestStateFile: string;
+  ingestStagingDir: string;
   socketPath: string;
   pidFile: string;
   lockFile: string;
@@ -29,6 +30,7 @@ export function statePaths(root: string = join(homedir(), ".taskrunner")): State
     logsDir: join(root, "logs"),
     configFile: join(root, "config.toml"),
     ingestStateFile: join(root, "ingest-state.json"),
+    ingestStagingDir: join(root, "ingest-staging"),
     socketPath: join(runtimeDir, "daemon.sock"),
     pidFile: join(runtimeDir, "daemon.pid"),
     lockFile: join(runtimeDir, "daemon.lock"),

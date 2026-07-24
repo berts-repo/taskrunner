@@ -62,6 +62,14 @@ table. This makes `~/.taskrunner/events.jsonl` a permanent, queryable
 archive of agent conversations that outlives each tool's own retention —
 Claude Code, for instance, purges its transcripts after 30 days by default.
 
+The same sweep also reaches inside the workers: each worker's transcripts
+are copied out of its Docker auth volume (via a short-lived `docker cp`, no
+host mount needed) and archived too, so the full interior of every
+delegated turn — including intermediate tool calls — is captured and links
+back to its task through the `worker_sessions` table. Worker-volume sources
+are derived automatically from each configured worker's `auth_volume`, so a
+custom worker is archived with no extra config.
+
 The archive is ingest-only: native transcript files are never moved or
 modified (session resume depends on them), and re-sweeping is idempotent —
 message ids are a deterministic hash of `(source, session, record)`, so a
@@ -154,7 +162,16 @@ dirs = ["~/.claude/projects"] # scanned recursively for *.jsonl transcripts
 
 Any other `[worker.<name>]` section defines a new worker — see below.
 Any other `[ingest.sources.<name>]` section adds a transcript source; it
-needs a `format` naming a built-in parser (`claude-code`, `codex`).
+needs a `format` naming a built-in parser (`claude-code`, `codex`) and the
+host `dirs` to scan. Unknown keys are rejected rather than ignored, so a
+typo fails the config instead of silently archiving nothing.
+
+A source is always host directories. Worker transcripts living inside
+Docker auth volumes are not configured here — they are derived from each
+worker's own `auth_volume` and `image`, which is what keeps the volume, the
+image used to reach into it, and the per-harness transcript path from ever
+disagreeing. Copies land under `~/.taskrunner/ingest-staging`, created
+owner-only because an auth volume also holds that worker's credentials.
 
 ## Network access
 
