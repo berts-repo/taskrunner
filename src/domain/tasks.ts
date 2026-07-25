@@ -193,3 +193,92 @@ export function getTurnArtifacts(index: StateIndex, turnId: string): ArtifactHan
     )
     .all(turnId) as unknown as ArtifactHandle[];
 }
+
+// One swept transcript record belonging to a task's worker session(s).
+export interface TranscriptMessage {
+  role: string;
+  kind: string;
+  content: string;
+  native_ts: string | null;
+  native_session_id: string;
+}
+
+/** Default cap on messages rendered for one task, so a lookup can't dump a
+ * whole delegated turn's interior in a single response. */
+export const DEFAULT_TRANSCRIPT_LIMIT = 500;
+
+/**
+ * A task's archived transcript: every message swept from the worker session(s)
+ * this task ran under, joined via the phase-2 link
+ * `worker_sessions.native_session_id → messages.native_session_id`. Returned in
+ * chronological order, but capped to the most recent `limit` — a delegated turn
+ * can archive thousands of records and the tail is what a caller usually wants.
+ * Fetches one past `limit` to report whether older messages were dropped.
+ */
+export function getTaskMessages(
+  index: StateIndex,
+  taskId: string,
+  limit: number = DEFAULT_TRANSCRIPT_LIMIT,
+): { messages: TranscriptMessage[]; capped: boolean } {
+  const rows = index.db
+    .prepare(
+      `SELECT role, kind, content, native_ts, native_session_id
+         FROM messages
+        WHERE native_session_id IN (
+                SELECT DISTINCT native_session_id FROM worker_sessions WHERE task_id = ?
+              )
+        ORDER BY native_ts DESC, recorded_at DESC, id DESC
+        LIMIT ?`,
+    )
+    .all(taskId, limit + 1) as unknown as TranscriptMessage[];
+  const capped = rows.length > limit;
+  if (capped) rows.length = limit;
+  rows.reverse(); // newest-first for the cap, chronological for display
+  return { messages: rows, capped };
+}
+
+// One full-text hit from corpus-wide transcript search. `task_id` is present
+// only when the matched message came from a worker session linked to a task;
+// host-session messages match too and carry none.
+export interface TranscriptHit {
+  task_id: string | null;
+  source: string;
+  role: string;
+  kind: string;
+  native_ts: string | null;
+  native_session_id: string;
+  snippet: string;
+}
+
+export const DEFAULT_SEARCH_LIMIT = 20;
+
+/**
+ * Full-text search across every ingested transcript message. Attribution to a
+ * task is a correlated subquery (not a join) so an fts hit is never multiplied
+ * when several turns share one native session id. May throw on malformed FTS5
+ * query syntax — callers map that to a client error.
+ */
+export function searchMessages(
+  index: StateIndex,
+  query: string,
+  limit: number = DEFAULT_SEARCH_LIMIT,
+): TranscriptHit[] {
+  return index.db
+    .prepare(
+      `SELECT
+         (SELECT ws.task_id FROM worker_sessions ws
+           WHERE ws.native_session_id = f.native_session_id
+           ORDER BY ws.recorded_at, ws.id LIMIT 1) AS task_id,
+         f.source            AS source,
+         f.role              AS role,
+         f.kind              AS kind,
+         f.native_ts         AS native_ts,
+         f.native_session_id AS native_session_id,
+         snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet
+       FROM messages_fts f
+       WHERE messages_fts MATCH ?
+       ORDER BY rank
+       LIMIT ?`,
+    )
+    .all(query, limit) as unknown as TranscriptHit[];
+}

@@ -8,7 +8,7 @@ import type { LogEvent } from "./events.js";
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE projects (
@@ -94,6 +94,15 @@ CREATE TABLE messages (
   recorded_at TEXT NOT NULL
 );
 CREATE INDEX messages_session ON messages(source, native_session_id);
+CREATE VIRTUAL TABLE messages_fts USING fts5(
+  content,
+  message_id UNINDEXED,
+  source UNINDEXED,
+  native_session_id UNINDEXED,
+  role UNINDEXED,
+  kind UNINDEXED,
+  native_ts UNINDEXED
+);
 CREATE TABLE artifacts (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -250,25 +259,47 @@ export class StateIndex {
           event.ts,
         );
         break;
-      case "message.recorded":
-        db.prepare(
-          `INSERT OR IGNORE INTO messages
-             (id, source, native_session_id, native_record_id, role, kind,
-              content, native_ts, project_path, recorded_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          event.message_id,
-          event.source,
-          event.native_session_id,
-          event.native_record_id,
-          event.role,
-          event.kind,
-          event.content,
-          event.native_ts ?? null,
-          event.project_path ?? null,
-          event.ts,
-        );
+      case "message.recorded": {
+        // message_id is a deterministic hash, so re-sweeping the same record
+        // re-emits the event; INSERT OR IGNORE keeps `messages` idempotent.
+        // FTS5 has no such guard, so only index when a row was actually added —
+        // otherwise a rebuild would double-index every re-swept message.
+        const res = db
+          .prepare(
+            `INSERT OR IGNORE INTO messages
+               (id, source, native_session_id, native_record_id, role, kind,
+                content, native_ts, project_path, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            event.message_id,
+            event.source,
+            event.native_session_id,
+            event.native_record_id,
+            event.role,
+            event.kind,
+            event.content,
+            event.native_ts ?? null,
+            event.project_path ?? null,
+            event.ts,
+          );
+        if (Number(res.changes) > 0) {
+          db.prepare(
+            `INSERT INTO messages_fts
+               (content, message_id, source, native_session_id, role, kind, native_ts)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            event.content,
+            event.message_id,
+            event.source,
+            event.native_session_id,
+            event.role,
+            event.kind,
+            event.native_ts ?? null,
+          );
+        }
         break;
+      }
       case "audit.recorded":
         db.prepare(
           `INSERT OR IGNORE INTO audit_events (id, session_id, task_id, turn_id, kind, payload, ts)

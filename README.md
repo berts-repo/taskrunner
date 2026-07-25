@@ -7,11 +7,12 @@ container over a task-local git clone, behind a filtering egress proxy, and
 every observable step lands in a durable audit trail you can query back
 over MCP.
 
-- Four core tools: `assign-task`, `continue-task`, `lookup-task`,
-  `cancel-task`.
+- Five tools: `assign-task`, `continue-task`, `lookup-task`, `cancel-task`,
+  and `search-transcripts`.
 - Asynchronous multi-turn tasks: assign returns immediately, `lookup-task`
-  retrieves results (including paired exchanges and end-to-end traces), and
-  `continue-task` resumes the worker's native session.
+  retrieves results (including paired exchanges, end-to-end traces, and the
+  worker's archived transcript), and `continue-task` resumes the worker's
+  native session.
 - Docker-only worker isolation: task-local clone mounted at `/workspace`,
   internal network with no outside route, egress proxy allowlist, and
   narrow worker-owned auth volumes — never host credentials.
@@ -81,6 +82,14 @@ truth. Sources are pluggable exactly like workers — an
 
 To stop Claude Code's 30-day purge so nothing is lost before the first
 sweep, raise `cleanupPeriodDays` in `~/.claude/settings.json`.
+
+The archive reads back over MCP two ways. `lookup-task` with
+`include: ["transcript"]` returns one task's worker interior — the tool calls,
+reasoning, and messages that ran inside the container, joined through
+`worker_sessions` (cap the volume with `scope.last`). `search-transcripts`
+full-text searches the entire ingested corpus (worker turns *and* host
+sessions) via SQLite FTS5, returning matching messages with a snippet and, for
+worker-session hits, the task they belong to.
 
 ## Quick Start
 

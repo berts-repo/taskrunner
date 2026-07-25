@@ -1,11 +1,13 @@
 import { ToolError } from "../domain/errors.js";
 import {
   findProjectByPath,
+  getTaskMessages,
   getTaskSnapshot,
   getTurnArtifacts,
   getTurnAudit,
   listTaskSnapshots,
   listTurns,
+  searchMessages,
   type TaskSnapshot,
   type TurnInfo,
 } from "../domain/tasks.js";
@@ -14,9 +16,10 @@ import type { StateIndex } from "../storage/index.js";
 
 // lookup-task semantics: compact summaries by default; expansion blocks only for requested
 // include fields; history as paired exchanges, never loose audit rows; trace
-// replays inputs, observable worker activity, and outputs per in-scope turn.
+// replays inputs, observable worker activity, and outputs per in-scope turn;
+// transcript surfaces the archived interior of the worker's own session(s).
 
-type IncludeField = "turns" | "artifacts" | "audit" | "diff" | "trace";
+type IncludeField = "turns" | "artifacts" | "audit" | "diff" | "trace" | "transcript";
 
 interface LookupArgs {
   taskId?: string;
@@ -52,6 +55,7 @@ function lookupSingleTask(deps: LookupDeps, taskId: string, args: LookupArgs): s
   if (include.has("audit")) sections.push(...turns.map((turn) => renderAudit(index, turn)));
   if (include.has("artifacts")) sections.push(renderArtifacts(index, turns));
   if (include.has("diff")) sections.push(renderDiffs(deps, turns));
+  if (include.has("transcript")) sections.push(renderTranscript(index, taskId, args.scope?.last));
   return sections.join("\n\n");
 }
 
@@ -185,6 +189,60 @@ function renderDiffs(deps: LookupDeps, turns: TurnInfo[]): string {
   }
   if (!any) lines.push("  (no diff artifacts in scope)");
   return lines.join("\n");
+}
+
+/** The worker's archived transcript for a task: every swept message from the
+ *  session(s) it ran under, one compacted line each. Task-level — `scope.turnId`
+ *  does not sub-select it; `scope.last` caps the number of messages shown. */
+function renderTranscript(index: StateIndex, taskId: string, cap?: number): string {
+  const { messages, capped } = getTaskMessages(index, taskId, cap);
+  const lines = ["transcript:"];
+  if (messages.length === 0) {
+    lines.push("  (no transcript recorded)");
+    return lines.join("\n");
+  }
+  for (const m of messages) {
+    const ts = m.native_ts ? `${m.native_ts}  ` : "";
+    lines.push(`  ${ts}${m.role}/${m.kind}  ${compactMessageContent(m.content)}`);
+  }
+  if (capped) lines.push(`  … capped at ${messages.length} messages (raise scope.last for more)`);
+  return lines.join("\n");
+}
+
+/** Corpus-wide transcript search rendered for the search-transcripts tool. */
+export function searchTranscripts(index: StateIndex, query: string, limit: number): string {
+  let hits;
+  try {
+    hits = searchMessages(index, query, limit);
+  } catch (err) {
+    throw new ToolError(
+      "invalid_request",
+      `invalid search query: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (hits.length === 0) return `no transcript matches for: ${query}`;
+  const lines = [`transcript matches (${hits.length}):`];
+  for (const h of hits) {
+    const where = h.task_id ? `task ${h.task_id}` : `${h.source} session ${h.native_session_id}`;
+    const ts = h.native_ts ? ` · ${h.native_ts}` : "";
+    lines.push(`  ${where} · ${h.role}/${h.kind}${ts}`);
+    lines.push(`    ${truncate(h.snippet, 200)}`);
+  }
+  return lines.join("\n");
+}
+
+/** Message content is plain text or a JSON-encoded block (tool_use/tool_result);
+ *  compact either to one readable line. */
+function compactMessageContent(content: string): string {
+  const trimmed = content.trimStart();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return compactPayload(JSON.parse(content));
+    } catch {
+      // Not actually JSON — fall through to plain-text truncation.
+    }
+  }
+  return truncate(content, 160);
 }
 
 function compactPayload(payload: unknown): string {

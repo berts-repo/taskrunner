@@ -47,13 +47,14 @@ describe("MCP tool surface", () => {
     await daemon.stop();
   });
 
-  it("lists the four core tools", async () => {
+  it("lists the delegation and transcript tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       "assign-task",
       "cancel-task",
       "continue-task",
       "lookup-task",
+      "search-transcripts",
     ]);
   });
 

@@ -5,7 +5,7 @@ import type { Config } from "../config.js";
 import { ToolError } from "../domain/errors.js";
 import type { StatePaths } from "../paths.js";
 import { renderCancel, renderOutcome } from "../render.js";
-import { lookupTask } from "./lookup.js";
+import { lookupTask, searchTranscripts } from "./lookup.js";
 import type { ArtifactStore } from "../storage/artifacts.js";
 import type { EventBody, LogEvent } from "../storage/events.js";
 import type { StateIndex } from "../storage/index.js";
@@ -65,6 +65,10 @@ function buildInstructions(config: Config): string {
     "Lifecycle: assign-task starts a task (wait: true blocks for the result); lookup-task " +
       "fetches status, output, and audit records; continue-task sends a follow-up prompt to " +
       "an existing task; cancel-task stops a running turn.",
+    "",
+    "Transcripts: worker turns and host agent sessions are archived. lookup-task with " +
+      'include ["transcript"] returns one task\'s worker interior; search-transcripts ' +
+      "full-text searches the whole ingested corpus.",
     "",
     "Worker credentials live in Docker volumes on this host. If a turn fails with a " +
       "login or auth error, the user must re-run the worker login procedure on the host " +
@@ -177,9 +181,10 @@ export function createMcpServer(ctx: ToolContext): McpServer {
     "lookup-task",
     "Look up delegated tasks. Compact summary by default; expand with include " +
       "(turns = paired prompt/response exchanges, trace = end-to-end replay of " +
-      "inputs/worker activity/outputs, audit, artifacts, diff). Scope narrows " +
-      "expansions to one turn or the last N exchanges. Pass project instead of " +
-      "taskId to list a project's tasks.",
+      "inputs/worker activity/outputs, audit, artifacts, diff, transcript = the " +
+      "archived interior of the worker's own session). Scope narrows expansions to " +
+      "one turn or the last N exchanges (for transcript, the last N messages). Pass " +
+      "project instead of taskId to list a project's tasks.",
     {
       taskId: z.string().optional(),
       project: z
@@ -187,7 +192,7 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         .optional()
         .describe("Absolute project path: list that project's tasks instead"),
       include: z
-        .array(z.enum(["turns", "artifacts", "audit", "diff", "trace"]))
+        .array(z.enum(["turns", "artifacts", "audit", "diff", "trace", "transcript"]))
         .optional(),
       scope: z
         .object({
@@ -202,6 +207,26 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         { index: ctx.index, artifacts: ctx.artifacts },
         args as Parameters<typeof lookupTask>[1],
       ),
+  );
+
+  tool(
+    "search-transcripts",
+    "Full-text search across every ingested transcript — the archived interior of " +
+      "delegated worker turns and host agent sessions. Returns matching messages " +
+      "with a snippet, attributed to a task where the message came from a linked " +
+      "worker session. Query uses SQLite FTS5 syntax: bare words are ANDed, " +
+      '"quoted text" matches a phrase.',
+    {
+      query: z.string().describe("FTS5 search expression"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(50)
+        .optional()
+        .describe("Max hits to return (default 20)"),
+    },
+    async (args) => searchTranscripts(ctx.index, args.query, args.limit ?? 20),
   );
 
   tool(
