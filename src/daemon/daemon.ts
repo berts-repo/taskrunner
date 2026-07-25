@@ -20,6 +20,7 @@ import { createMcpServer, type ToolContext } from "./mcp-server.js";
 import { lookupSession, lookupTask, searchTranscripts } from "./lookup.js";
 import { ToolError } from "../domain/errors.js";
 import type { SearchFilters } from "../domain/tasks.js";
+import { isTranscriptView, TRANSCRIPT_VIEWS, type TranscriptView } from "./transcript-view.js";
 import { Scheduler, type RunnerContext, type WorkspaceProvider } from "./scheduler.js";
 
 export interface DaemonOptions {
@@ -371,6 +372,31 @@ export class Daemon {
     }
   }
 
+  /** Transcript rendering params, shared by /lookup-session and /lookup-task. */
+  private viewParams(
+    q: URLSearchParams,
+    num: (name: string) => number | undefined,
+  ): { view?: TranscriptView; toolLines?: number; promptIdx?: number } {
+    const view = q.get("view");
+    if (view !== null && !isTranscriptView(view)) {
+      throw new ToolError("invalid_request", `view must be one of: ${TRANSCRIPT_VIEWS.join(", ")}`);
+    }
+    const whole = (name: string): number | undefined => {
+      const n = num(name);
+      if (n !== undefined && (!Number.isInteger(n) || n < 0)) {
+        throw new ToolError("invalid_request", `${name} must be a non-negative integer`);
+      }
+      return n;
+    };
+    const toolLines = whole("toolLines");
+    const prompt = whole("prompt");
+    return {
+      ...(view !== null ? { view } : {}),
+      ...(toolLines !== undefined ? { toolLines } : {}),
+      ...(prompt !== undefined ? { promptIdx: prompt } : {}),
+    };
+  }
+
   private async renderRead(url: URL): Promise<string> {
     const q = url.searchParams;
     const num = (name: string): number | undefined => {
@@ -391,6 +417,7 @@ export class Daemon {
           ...(q.get("source") ? { source: q.get("source")! } : {}),
           ...(num("limit") !== undefined ? { limit: num("limit")! } : {}),
           ...(last !== undefined ? { scope: { last } } : {}),
+          ...this.viewParams(q, num),
         });
       }
       case "/search-transcripts": {
@@ -428,6 +455,7 @@ export class Daemon {
             : {}),
           ...(scope ? { scope } : {}),
           ...(num("limit") !== undefined ? { limit: num("limit")! } : {}),
+          ...this.viewParams(q, num),
         });
       }
       default:

@@ -75,12 +75,59 @@ function buildInstructions(config: Config): string {
       "lists recent sessions (or one session's full history by id), including host " +
       'sessions no task links; lookup-task with include ["transcript"] returns one ' +
       "task's worker interior; search-transcripts full-text searches the whole ingested " +
-      "corpus, optionally scoped to a project, sessions, the last N sessions, or a time window.",
+      "corpus, optionally scoped to a project, sessions, the last N sessions, or a time window. " +
+      'Both lookups return one compacted line per message; pass view "timeline" for the ' +
+      "full audit rendering, and prompt N to read a single exchange.",
     "",
     "Worker credentials live in Docker volumes on this host. If a turn fails with a " +
       "login or auth error, the user must re-run the worker login procedure on the host " +
       "(documented in the taskrunner README); it cannot be fixed through these tools.",
   ].join("\n");
+}
+
+/**
+ * How an archived transcript is rendered, shared by lookup-task and
+ * lookup-session. The default stays compact: an agent scanning history should
+ * pay for the timeline only when it asks for it.
+ */
+const VIEW_ARGS = {
+  view: z
+    .enum(["compact", "timeline"])
+    .optional()
+    .describe(
+      "compact (default): one truncated line per message, for scanning. " +
+        "timeline: the audit view — prompts, replies and reasoning in full, " +
+        "tool bodies clipped to toolLines.",
+    ),
+  toolLines: z
+    .number()
+    .int()
+    .min(0)
+    .max(1000)
+    .optional()
+    .describe("timeline only: lines kept of each tool body; 0 keeps all (default 20)"),
+  prompt: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      "Return only the exchange at this prompt index — one real user prompt and " +
+        "everything that followed it. The timeline marks these as [N].",
+    ),
+};
+
+/** Maps the wire name `prompt` onto the renderer's `promptIdx`. */
+function viewArgs(args: {
+  view?: "compact" | "timeline";
+  toolLines?: number;
+  prompt?: number;
+}): { view?: "compact" | "timeline"; toolLines?: number; promptIdx?: number } {
+  return {
+    ...(args.view !== undefined ? { view: args.view } : {}),
+    ...(args.toolLines !== undefined ? { toolLines: args.toolLines } : {}),
+    ...(args.prompt !== undefined ? { promptIdx: args.prompt } : {}),
+  };
 }
 
 export function createMcpServer(ctx: ToolContext): McpServer {
@@ -208,12 +255,13 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         })
         .optional(),
       limit: z.number().int().positive().max(50).optional().describe("Max tasks to list"),
+      ...VIEW_ARGS,
     },
     async (args) =>
-      lookupTask(
-        { index: ctx.index, artifacts: ctx.artifacts },
-        args as Parameters<typeof lookupTask>[1],
-      ),
+      lookupTask({ index: ctx.index, artifacts: ctx.artifacts }, {
+        ...(args as Parameters<typeof lookupTask>[1]),
+        ...viewArgs(args),
+      }),
   );
 
   tool(
@@ -242,10 +290,11 @@ export function createMcpServer(ctx: ToolContext): McpServer {
       scope: z
         .object({ last: z.number().int().positive().optional().describe("Last N messages") })
         .optional(),
+      ...VIEW_ARGS,
     },
     async (args) => {
       await ctx.sweepHostTranscripts();
-      return lookupSession(ctx.index, args);
+      return lookupSession(ctx.index, { ...args, ...viewArgs(args) });
     },
   );
 

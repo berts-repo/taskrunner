@@ -20,15 +20,22 @@ Commands:
 Query (read the ingested corpus without an MCP session):
   sessions [--project P] [--limit N]
               List ingested transcript sessions, most recent first.
-  session <id> [--source S] [--last N]
-              Print one session's full history (host or worker session).
+  session <id> [--source S] [--last N] [--prompt N]
+               [--compact] [--tool-lines N]
+              Print one session's timeline (host or worker session): prompts,
+              replies and reasoning in full, tool output capped at 20 lines
+              (--tool-lines 0 for all). --prompt N prints one exchange;
+              --compact restores one truncated line per message. Pipe to less.
   search "<fts>" [--project P] [--sessions a,b] [--last-sessions N]
                  [--role R] [--kind K] [--since T] [--until T]
                  [--sort rank|recent] [--limit N]
               Full-text search across transcripts.
   task <id> [--include turns,trace,audit,artifacts,diff,transcript]
-            [--turn <turnId>] [--last N]
+            [--turn <turnId>] [--last N] [--prompt N]
+            [--compact] [--tool-lines N]
               Look up one task; tasks --project P lists a project's tasks.
+              --include transcript prints the worker's interior as a timeline,
+              with the same rendering flags as session.
 `;
 
 interface Args {
@@ -40,6 +47,9 @@ interface Args {
   paths: StatePaths;
 }
 
+/** Flags that stand alone; every other `--x` takes the next argv entry. */
+const BOOLEAN_FLAGS = new Set(["compact"]);
+
 function parseArgs(argv: string[]): Args {
   let command: string | undefined;
   const rest: string[] = [];
@@ -50,6 +60,8 @@ function parseArgs(argv: string[]): Args {
     if (arg === "--state-root") {
       root = argv[++i];
       if (!root) throw new Error("--state-root requires a directory argument");
+    } else if (arg.startsWith("--") && BOOLEAN_FLAGS.has(arg.slice(2))) {
+      flags[arg.slice(2)] = "true";
     } else if (arg.startsWith("--")) {
       const value = argv[++i];
       if (value === undefined) throw new Error(`${arg} requires a value`);
@@ -87,6 +99,19 @@ async function readQuery(paths: StatePaths, path: string, params: Record<string,
   } finally {
     await agent.close();
   }
+}
+
+/**
+ * Transcript rendering params for the query routes. The terminal defaults to
+ * the timeline — an audit view is what a person at a shell wants — while the
+ * routes themselves keep defaulting to compact for the MCP tools.
+ */
+function renderFlags(flags: Record<string, string>): Record<string, string | undefined> {
+  return {
+    view: flags["compact"] ? "compact" : "timeline",
+    toolLines: flags["tool-lines"],
+    prompt: flags["prompt"],
+  };
 }
 
 async function up(paths: StatePaths): Promise<number> {
@@ -208,6 +233,7 @@ async function main(argv: string[]): Promise<number> {
         sessionId: id,
         source: args.flags["source"],
         last: args.flags["last"],
+        ...renderFlags(args.flags),
       });
     }
     case "search": {
@@ -240,6 +266,7 @@ async function main(argv: string[]): Promise<number> {
         include: args.flags["include"],
         turnId: args.flags["turn"],
         last: args.flags["last"],
+        ...renderFlags(args.flags),
       });
     }
     case "tasks":
@@ -258,5 +285,12 @@ async function main(argv: string[]): Promise<number> {
       return 1;
   }
 }
+
+// A timeline is long enough to be read through a pager, and `less`/`head`
+// closing the pipe first must end the process quietly, not raise EPIPE.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+  throw err;
+});
 
 process.exitCode = await main(process.argv.slice(2));

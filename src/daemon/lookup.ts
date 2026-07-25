@@ -13,10 +13,18 @@ import {
   type SearchFilters,
   type SessionInfo,
   type TaskSnapshot,
+  type TranscriptMessage,
   type TurnInfo,
 } from "../domain/tasks.js";
 import type { ArtifactStore } from "../storage/artifacts.js";
 import type { StateIndex } from "../storage/index.js";
+import {
+  compactPayload,
+  DEFAULT_TOOL_LINES,
+  renderMessages,
+  truncate,
+  type TranscriptView,
+} from "./transcript-view.js";
 
 // lookup-task semantics: compact summaries by default; expansion blocks only for requested
 // include fields; history as paired exchanges, never loose audit rows; trace
@@ -31,6 +39,26 @@ interface LookupArgs {
   include?: IncludeField[];
   scope?: { turnId?: string; last?: number };
   limit?: number;
+  /** Rendering of the `transcript` include; defaults to compact. */
+  view?: TranscriptView;
+  toolLines?: number;
+  promptIdx?: number;
+}
+
+/**
+ * How many messages a transcript read returns. The timeline is an audit view, so
+ * it is uncapped unless the caller narrows it; compact keeps its 500 default.
+ * An explicit `last` always wins.
+ */
+function messageQuery(
+  view: TranscriptView,
+  last: number | undefined,
+  promptIdx: number | undefined,
+): { limit?: number | null; promptIdx?: number } {
+  return {
+    limit: last ?? (view === "timeline" ? null : undefined),
+    ...(promptIdx !== undefined ? { promptIdx } : {}),
+  };
 }
 
 interface LookupDeps {
@@ -59,7 +87,7 @@ function lookupSingleTask(deps: LookupDeps, taskId: string, args: LookupArgs): s
   if (include.has("audit")) sections.push(...turns.map((turn) => renderAudit(index, turn)));
   if (include.has("artifacts")) sections.push(renderArtifacts(index, turns));
   if (include.has("diff")) sections.push(renderDiffs(deps, turns));
-  if (include.has("transcript")) sections.push(renderTranscript(index, taskId, args.scope?.last));
+  if (include.has("transcript")) sections.push(renderTranscript(index, taskId, args));
   return sections.join("\n\n");
 }
 
@@ -196,19 +224,26 @@ function renderDiffs(deps: LookupDeps, turns: TurnInfo[]): string {
 }
 
 /** The worker's archived transcript for a task: every swept message from the
- *  session(s) it ran under, one compacted line each. Task-level — `scope.turnId`
- *  does not sub-select it; `scope.last` caps the number of messages shown. */
-function renderTranscript(index: StateIndex, taskId: string, cap?: number): string {
-  const { messages, capped } = getTaskMessages(index, taskId, cap);
+ *  session(s) it ran under, in the requested view. Task-level — `scope.turnId`
+ *  does not sub-select it; `scope.last` caps the number of messages shown, and
+ *  `promptIdx` narrows to one exchange. */
+function renderTranscript(index: StateIndex, taskId: string, args: LookupArgs): string {
+  const view = args.view ?? "compact";
+  const { messages, capped } = getTaskMessages(
+    index,
+    taskId,
+    messageQuery(view, args.scope?.last, args.promptIdx),
+  );
   const lines = ["transcript:"];
   if (messages.length === 0) {
-    lines.push("  (no transcript recorded)");
+    lines.push(
+      args.promptIdx === undefined
+        ? "  (no transcript recorded)"
+        : `  (no messages at prompt ${args.promptIdx})`,
+    );
     return lines.join("\n");
   }
-  for (const m of messages) {
-    const ts = m.native_ts ? `${m.native_ts}  ` : "";
-    lines.push(`  ${ts}${m.role}/${m.kind}  ${compactMessageContent(m.content)}`);
-  }
+  lines.push(...renderMessages(messages, view, args.toolLines ?? DEFAULT_TOOL_LINES));
   if (capped) lines.push(`  … capped at ${messages.length} messages (raise scope.last for more)`);
   return lines.join("\n");
 }
@@ -247,6 +282,10 @@ interface SessionLookupArgs {
   source?: string;
   limit?: number;
   scope?: { last?: number };
+  /** Rendering of a single session's history; defaults to compact. */
+  view?: TranscriptView;
+  toolLines?: number;
+  promptIdx?: number;
 }
 
 /**
@@ -279,13 +318,14 @@ export function lookupSession(index: StateIndex, args: SessionLookupArgs): strin
     return lines.join("\n");
   }
   const info = candidates[0]!;
+  const view = args.view ?? "compact";
   const { messages, capped } = getSessionMessages(
     index,
     info.source,
     info.native_session_id,
-    args.scope?.last,
+    messageQuery(view, args.scope?.last, args.promptIdx),
   );
-  return renderSessionHistory(info, messages, capped);
+  return renderSessionHistory(info, messages, capped, args, view);
 }
 
 function renderSessionList(sessions: SessionInfo[]): string {
@@ -305,50 +345,24 @@ function renderSessionList(sessions: SessionInfo[]): string {
 
 function renderSessionHistory(
   info: SessionInfo,
-  messages: { role: string; kind: string; content: string; native_ts: string | null }[],
+  messages: TranscriptMessage[],
   capped: boolean,
+  args: SessionLookupArgs,
+  view: TranscriptView,
 ): string {
   const proj = info.project_path ? `, ${info.project_path}` : "";
-  const lines = [`session ${info.native_session_id} (${info.source}${proj}):`];
+  const at = args.promptIdx === undefined ? "" : ` · prompt ${args.promptIdx}`;
+  const lines = [`session ${info.native_session_id} (${info.source}${proj})${at}:`];
   if (messages.length === 0) {
-    lines.push("  (no messages recorded)");
+    lines.push(
+      args.promptIdx === undefined
+        ? "  (no messages recorded)"
+        : `  (no messages at prompt ${args.promptIdx})`,
+    );
     return lines.join("\n");
   }
-  for (const m of messages) {
-    const ts = m.native_ts ? `${m.native_ts}  ` : "";
-    lines.push(`  ${ts}${m.role}/${m.kind}  ${compactMessageContent(m.content)}`);
-  }
+  lines.push(...renderMessages(messages, view, args.toolLines ?? DEFAULT_TOOL_LINES));
   if (capped) lines.push(`  … capped at ${messages.length} messages (raise scope.last for more)`);
   return lines.join("\n");
 }
 
-/** Message content is plain text or a JSON-encoded block (tool_use/tool_result);
- *  compact either to one readable line. */
-function compactMessageContent(content: string): string {
-  const trimmed = content.trimStart();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      return compactPayload(JSON.parse(content));
-    } catch {
-      // Not actually JSON — fall through to plain-text truncation.
-    }
-  }
-  return truncate(content, 160);
-}
-
-function compactPayload(payload: unknown): string {
-  if (payload && typeof payload === "object") {
-    const obj = payload as Record<string, unknown>;
-    const item = (obj["item"] as Record<string, unknown> | undefined) ?? obj;
-    for (const key of ["text", "message", "command", "path"]) {
-      if (typeof item[key] === "string") return truncate(item[key] as string, 160);
-    }
-  }
-  if (typeof payload === "string") return truncate(payload, 160);
-  return truncate(JSON.stringify(payload) ?? "null", 160);
-}
-
-function truncate(text: string, max: number): string {
-  const line = text.replaceAll(/\s+/g, " ").trim();
-  return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
-}

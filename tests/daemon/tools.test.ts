@@ -99,6 +99,49 @@ describe("MCP tool surface", () => {
     expect(toolText(cancel)).toContain("status: canceled");
   });
 
+  it("renders a transcript identically for the tool and the CLI's read route", async () => {
+    // Seed the projection directly: this asserts about rendering, not ingest.
+    const records = [
+      { role: "user", kind: "message", content: "why did it fail" },
+      { role: "assistant", kind: "message", content: "because the socket path was too long" },
+    ];
+    records.forEach((r, i) =>
+      daemon.index.apply({
+        id: `evt-${i}`,
+        ts: `2026-07-25T00:00:0${i}.000Z`,
+        type: "message.recorded",
+        message_id: `msg-${i}`,
+        source: "claude-code",
+        native_session_id: "sess-mcp",
+        native_record_id: `r${i}`,
+        native_ts: `2026-07-25T00:00:0${i}.000Z`,
+        ...r,
+      } as never),
+    );
+
+    const viaTool = toolText(
+      await client.callTool({
+        name: "lookup-session",
+        arguments: { sessionId: "sess-mcp", view: "timeline", prompt: 1 },
+      }),
+    );
+    const viaRoute = await unixFetch(daemon.paths.socketPath)(
+      "http://taskrunner/lookup-session?sessionId=sess-mcp&view=timeline&prompt=1",
+    ).then((r) => r.text());
+
+    expect(viaTool).toContain("── [1] user");
+    expect(viaTool).toContain("because the socket path was too long");
+    expect(viaRoute.trim()).toBe(viaTool.trim());
+  });
+
+  it("rejects an unknown view", async () => {
+    const res = await unixFetch(daemon.paths.socketPath)(
+      "http://taskrunner/lookup-session?sessionId=sess-mcp&view=verbose",
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("view must be one of");
+  });
+
   it("maps unknown workers to not_configured and audits tool calls", async () => {
     const result = await client.callTool({
       name: "assign-task",

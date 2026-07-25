@@ -194,18 +194,49 @@ export function getTurnArtifacts(index: StateIndex, turnId: string): ArtifactHan
     .all(turnId) as unknown as ArtifactHandle[];
 }
 
-// One swept transcript record belonging to a task's worker session(s).
+// One swept transcript record belonging to a task's worker session(s). The
+// tool_* and prompt_idx columns are projection-time facts (see message-facts.ts),
+// carried here so a renderer never has to re-parse the content blob.
 export interface TranscriptMessage {
   role: string;
   kind: string;
   content: string;
   native_ts: string | null;
   native_session_id: string;
+  prompt_idx: number;
+  tool_name: string | null;
+  tool_target: string | null;
+  is_error: number | null;
 }
 
 /** Default cap on messages rendered for one task, so a lookup can't dump a
  * whole delegated turn's interior in a single response. */
 export const DEFAULT_TRANSCRIPT_LIMIT = 500;
+
+/** Shared scoping for the two transcript readers. */
+export interface MessageQuery {
+  /** Keep the newest N. `null` reads the whole session — the timeline view's
+   * default, since a capped audit trail is not an audit trail. */
+  limit?: number | null;
+  /** Restrict to one addressable exchange: a real user prompt and everything
+   * that followed it, up to the next one. */
+  promptIdx?: number;
+}
+
+const MESSAGE_COLUMNS = `role, kind, content, native_ts, native_session_id,
+                         prompt_idx, tool_name, tool_target, is_error`;
+
+/** `LIMIT -1` is SQLite's "no limit"; the +1 probe detects a truncated read. */
+function limitClause(limit: number | null): { bind: number; cap: number | null } {
+  return limit === null ? { bind: -1, cap: null } : { bind: limit + 1, cap: limit };
+}
+
+function applyCap<T>(rows: T[], cap: number | null): { rows: T[]; capped: boolean } {
+  const capped = cap !== null && rows.length > cap;
+  if (capped) rows.length = cap as number;
+  rows.reverse(); // newest-first for the cap, chronological for display
+  return { rows, capped };
+}
 
 /**
  * A task's archived transcript: every message swept from the worker session(s)
@@ -218,23 +249,26 @@ export const DEFAULT_TRANSCRIPT_LIMIT = 500;
 export function getTaskMessages(
   index: StateIndex,
   taskId: string,
-  limit: number = DEFAULT_TRANSCRIPT_LIMIT,
+  opts: MessageQuery = {},
 ): { messages: TranscriptMessage[]; capped: boolean } {
+  const { bind, cap } = limitClause(opts.limit === undefined ? DEFAULT_TRANSCRIPT_LIMIT : opts.limit);
+  const promptFilter = opts.promptIdx === undefined ? "" : "AND prompt_idx = ?";
   const rows = index.db
     .prepare(
-      `SELECT role, kind, content, native_ts, native_session_id
+      `SELECT ${MESSAGE_COLUMNS}
          FROM messages
         WHERE native_session_id IN (
                 SELECT DISTINCT native_session_id FROM worker_sessions WHERE task_id = ?
               )
+          ${promptFilter}
         ORDER BY native_ts DESC, recorded_at DESC, id DESC
         LIMIT ?`,
     )
-    .all(taskId, limit + 1) as unknown as TranscriptMessage[];
-  const capped = rows.length > limit;
-  if (capped) rows.length = limit;
-  rows.reverse(); // newest-first for the cap, chronological for display
-  return { messages: rows, capped };
+    .all(
+      ...([taskId, ...(opts.promptIdx === undefined ? [] : [opts.promptIdx]), bind] as never[]),
+    ) as unknown as TranscriptMessage[];
+  const { rows: messages, capped } = applyCap(rows, cap);
+  return { messages, capped };
 }
 
 // One ingested transcript session (a distinct source+native_session_id = one
@@ -311,21 +345,29 @@ export function getSessionMessages(
   index: StateIndex,
   source: string,
   nativeSessionId: string,
-  limit: number = DEFAULT_TRANSCRIPT_LIMIT,
+  opts: MessageQuery = {},
 ): { messages: TranscriptMessage[]; capped: boolean } {
+  const { bind, cap } = limitClause(opts.limit === undefined ? DEFAULT_TRANSCRIPT_LIMIT : opts.limit);
+  const promptFilter = opts.promptIdx === undefined ? "" : "AND prompt_idx = ?";
   const rows = index.db
     .prepare(
-      `SELECT role, kind, content, native_ts, native_session_id
+      `SELECT ${MESSAGE_COLUMNS}
          FROM messages
         WHERE source = ? AND native_session_id = ?
+          ${promptFilter}
         ORDER BY native_ts DESC, recorded_at DESC, id DESC
         LIMIT ?`,
     )
-    .all(source, nativeSessionId, limit + 1) as unknown as TranscriptMessage[];
-  const capped = rows.length > limit;
-  if (capped) rows.length = limit;
-  rows.reverse();
-  return { messages: rows, capped };
+    .all(
+      ...([
+        source,
+        nativeSessionId,
+        ...(opts.promptIdx === undefined ? [] : [opts.promptIdx]),
+        bind,
+      ] as never[]),
+    ) as unknown as TranscriptMessage[];
+  const { rows: messages, capped } = applyCap(rows, cap);
+  return { messages, capped };
 }
 
 // One full-text hit from corpus-wide transcript search. `task_id` is present
