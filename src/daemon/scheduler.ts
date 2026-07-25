@@ -300,6 +300,7 @@ export class Scheduler {
           task_id: taskId,
           worker: harness.name,
           native_session_id: result.nativeSessionId,
+          turn_id: turnId,
         });
       }
 

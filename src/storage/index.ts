@@ -2,13 +2,14 @@ import * as fs from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { LogEvent } from "./events.js";
+import { messageFacts } from "./message-facts.js";
 
 // Derived, rebuildable index over the event log.
 // Delete-and-rebuild is the universal recovery path,
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const SCHEMA = `
 CREATE TABLE projects (
@@ -20,7 +21,10 @@ CREATE TABLE project_aliases (
   path TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id)
 );
-CREATE TABLE sessions (
+-- MCP client connections to the daemon, NOT conversations. A conversation is a
+-- row in transcript_sessions; the two are unrelated and were only ever confused
+-- because this table used to be called "sessions".
+CREATE TABLE mcp_sessions (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),
   client TEXT,
@@ -30,7 +34,7 @@ CREATE TABLE sessions (
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
-  session_id TEXT REFERENCES sessions(id),
+  session_id TEXT REFERENCES mcp_sessions(id),
   worker TEXT NOT NULL,
   prompt_summary TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -68,11 +72,13 @@ CREATE TABLE worker_sessions (
   task_id TEXT NOT NULL REFERENCES tasks(id),
   worker TEXT NOT NULL,
   native_session_id TEXT NOT NULL,
+  turn_id TEXT REFERENCES turns(id), -- null on records written before it was emitted
   recorded_at TEXT NOT NULL
 );
+CREATE INDEX worker_sessions_native ON worker_sessions(native_session_id);
 CREATE TABLE audit_events (
   id TEXT PRIMARY KEY,
-  session_id TEXT REFERENCES sessions(id),
+  session_id TEXT REFERENCES mcp_sessions(id),
   task_id TEXT REFERENCES tasks(id),
   turn_id TEXT REFERENCES turns(id),
   kind TEXT NOT NULL,
@@ -81,6 +87,10 @@ CREATE TABLE audit_events (
 );
 CREATE INDEX audit_events_task ON audit_events(task_id, ts);
 CREATE INDEX audit_events_turn ON audit_events(turn_id, ts);
+-- The trailing columns are facts parsed out of "content" by the message.recorded
+-- fold (see message-facts.ts). They exist so the archive can be filtered, joined
+-- and counted instead of only grepped: a tool call's identity currently lives
+-- inside a JSON blob, which full-text search can hit but SQL cannot use.
 CREATE TABLE messages (
   id TEXT PRIMARY KEY,
   source TEXT NOT NULL,
@@ -91,9 +101,19 @@ CREATE TABLE messages (
   content TEXT NOT NULL,
   native_ts TEXT,
   project_path TEXT,
-  recorded_at TEXT NOT NULL
+  recorded_at TEXT NOT NULL,
+  tool_use_id TEXT,      -- pairs a tool_use with its tool_result
+  tool_name TEXT,        -- tool_use only
+  tool_target TEXT,      -- tool_use only: the path or command it acted on
+  is_error INTEGER,      -- tool_result only; null when the record does not say
+  prompt_idx INTEGER NOT NULL DEFAULT 0, -- see transcript_sessions.prompt_count
+  turn_id TEXT REFERENCES turns(id)      -- worker sessions only; null elsewhere
 );
 CREATE INDEX messages_session ON messages(source, native_session_id);
+CREATE INDEX messages_tool_use ON messages(tool_use_id);
+CREATE INDEX messages_prompt ON messages(source, native_session_id, prompt_idx);
+CREATE INDEX messages_tool ON messages(tool_name, tool_target);
+CREATE INDEX messages_turn ON messages(turn_id);
 CREATE VIRTUAL TABLE messages_fts USING fts5(
   content,
   message_id UNINDEXED,
@@ -118,6 +138,10 @@ CREATE TABLE transcript_sessions (
   first_recorded_at TEXT NOT NULL,
   last_recorded_at TEXT NOT NULL,
   message_count INTEGER NOT NULL DEFAULT 0,
+  -- Real prompts seen so far; the running value of the counter that stamps
+  -- messages.prompt_idx. Held here rather than in memory so incremental folds
+  -- across daemon restarts continue the same numbering a rebuild produces.
+  prompt_count INTEGER NOT NULL DEFAULT 0,
   UNIQUE (source, native_session_id)
 );
 CREATE INDEX transcript_sessions_recency ON transcript_sessions(last_ts, last_recorded_at);
@@ -133,7 +157,7 @@ CREATE TABLE artifacts (
 );
 CREATE TABLE artifact_links (
   artifact_id TEXT NOT NULL REFERENCES artifacts(id),
-  session_id TEXT REFERENCES sessions(id),
+  session_id TEXT REFERENCES mcp_sessions(id),
   task_id TEXT REFERENCES tasks(id),
   turn_id TEXT REFERENCES turns(id),
   audit_event_id TEXT REFERENCES audit_events(id)
@@ -180,11 +204,11 @@ export class StateIndex {
         break;
       case "session.started":
         db.prepare(
-          "INSERT OR IGNORE INTO sessions (id, project_id, client, started_at) VALUES (?, ?, ?, ?)",
+          "INSERT OR IGNORE INTO mcp_sessions (id, project_id, client, started_at) VALUES (?, ?, ?, ?)",
         ).run(event.session_id, event.project_id ?? null, event.client ?? null, event.ts);
         break;
       case "session.ended":
-        db.prepare("UPDATE sessions SET ended_at = ? WHERE id = ?").run(
+        db.prepare("UPDATE mcp_sessions SET ended_at = ? WHERE id = ?").run(
           event.ts,
           event.session_id,
         );
@@ -267,17 +291,31 @@ export class StateIndex {
         break;
       case "worker-session.recorded":
         db.prepare(
-          `INSERT OR IGNORE INTO worker_sessions (id, task_id, worker, native_session_id, recorded_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO worker_sessions
+             (id, task_id, worker, native_session_id, turn_id, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         ).run(
           event.worker_session_id,
           event.task_id,
           event.worker,
           event.native_session_id,
+          event.turn_id ?? null,
           event.ts,
         );
         break;
       case "message.recorded": {
+        const sessionKey = `${event.source}/${event.native_session_id}`;
+        const facts = messageFacts(event.role, event.kind, event.content);
+        // prompt_idx addresses an exchange within a conversation: it is the
+        // number of real prompts seen up to and including this message, so
+        // everything before the first prompt (a session's harness preamble)
+        // stays at 0. Read before the insert, committed only if the insert
+        // actually added a row, so a re-swept duplicate never advances it.
+        const prior = db
+          .prepare("SELECT prompt_count FROM transcript_sessions WHERE id = ?")
+          .get(sessionKey) as { prompt_count: number } | undefined;
+        const promptIdx = (prior?.prompt_count ?? 0) + (facts.is_prompt ? 1 : 0);
+
         // message_id is a deterministic hash, so re-sweeping the same record
         // re-emits the event; INSERT OR IGNORE keeps `messages` idempotent.
         // FTS5 has no such guard, so only index when a row was actually added —
@@ -286,8 +324,9 @@ export class StateIndex {
           .prepare(
             `INSERT OR IGNORE INTO messages
                (id, source, native_session_id, native_record_id, role, kind,
-                content, native_ts, project_path, recorded_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                content, native_ts, project_path, recorded_at,
+                tool_use_id, tool_name, tool_target, is_error, prompt_idx, turn_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             event.message_id,
@@ -300,6 +339,12 @@ export class StateIndex {
             event.native_ts ?? null,
             event.project_path ?? null,
             event.ts,
+            facts.tool_use_id,
+            facts.tool_name,
+            facts.tool_target,
+            facts.is_error,
+            promptIdx,
+            this.turnFor(event.native_session_id, event.native_ts),
           );
         if (Number(res.changes) > 0) {
           db.prepare(
@@ -322,10 +367,11 @@ export class StateIndex {
           db.prepare(
             `INSERT INTO transcript_sessions
                (id, source, native_session_id, project_path, first_ts, last_ts,
-                first_recorded_at, last_recorded_at, message_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                first_recorded_at, last_recorded_at, message_count, prompt_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
              ON CONFLICT(id) DO UPDATE SET
                message_count = message_count + 1,
+               prompt_count = excluded.prompt_count,
                project_path = COALESCE(excluded.project_path, transcript_sessions.project_path),
                first_ts = MIN(
                  COALESCE(transcript_sessions.first_ts, excluded.first_ts),
@@ -335,7 +381,7 @@ export class StateIndex {
                  COALESCE(excluded.last_ts, transcript_sessions.last_ts)),
                last_recorded_at = MAX(transcript_sessions.last_recorded_at, excluded.last_recorded_at)`,
           ).run(
-            `${event.source}/${event.native_session_id}`,
+            sessionKey,
             event.source,
             event.native_session_id,
             event.project_path ?? null,
@@ -343,6 +389,7 @@ export class StateIndex {
             event.native_ts ?? null,
             event.ts,
             event.ts,
+            promptIdx,
           );
         }
         break;
@@ -403,6 +450,32 @@ export class StateIndex {
         );
         break;
     }
+  }
+
+  /**
+   * The turn a worker's transcript record belongs to, or null for a host
+   * session (the overwhelming majority — nothing links those to a task).
+   *
+   * Attribution is by time bucket rather than by any id in the record, because
+   * the worker CLIs write their transcripts knowing nothing about turns. It is
+   * sound because a task's container runs exactly one turn at a time, and it is
+   * deterministic on rebuild because both bounds come from event timestamps.
+   * A record swept before its turn was recorded stays null — best effort, and
+   * a later rebuild picks it up.
+   */
+  private turnFor(nativeSessionId: string, nativeTs: string | undefined): string | null {
+    if (nativeTs === undefined) return null;
+    const row = this.db
+      .prepare(
+        `SELECT t.id FROM worker_sessions ws
+           JOIN turns t ON t.task_id = ws.task_id
+          WHERE ws.native_session_id = ?
+            AND t.started_at <= ?
+            AND (t.completed_at IS NULL OR t.completed_at >= ?)
+          ORDER BY t.started_at LIMIT 1`,
+      )
+      .get(nativeSessionId, nativeTs, nativeTs) as { id: string } | undefined;
+    return row?.id ?? null;
   }
 
   private setTaskStatus(taskId: string, status: string, ts: string): void {

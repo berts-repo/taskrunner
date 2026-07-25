@@ -105,6 +105,9 @@ const workerSessionRecorded = z.object({
   task_id: z.string(),
   worker: z.string(),
   native_session_id: z.string(),
+  /** The turn that opened this worker session. Absent on records written
+   * before it was emitted, so readers must not require it. */
+  turn_id: z.string().optional(),
 });
 
 const auditRecorded = z.object({
