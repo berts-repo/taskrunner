@@ -80,8 +80,17 @@ function isSpecialAddress(ip) {
     );
   }
   const v6 = ip.toLowerCase();
-  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isSpecialAddress(mapped[1]);
+  // IPv4-mapped (::ffff:a.b.c.d), in either textual form: dotted, or the
+  // hex form ::ffff:aabb:ccdd that getaddrinfo may hand back un-normalized.
+  // Both reach the embedded IPv4 address, so vet that address, not the text.
+  const mappedDotted = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedDotted) return isSpecialAddress(mappedDotted[1]);
+  const mappedHex = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    return isSpecialAddress(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+  }
   return (
     v6 === "::" ||
     v6 === "::1" ||
@@ -89,6 +98,7 @@ function isSpecialAddress(ip) {
     v6.startsWith("fd") ||
     v6.startsWith("ff") || // multicast ff00::/8
     /^fe[89ab]/.test(v6) || // link-local fe80::/10
+    v6.startsWith("64:ff9b:") || // NAT64 64:ff9b::/96 and 64:ff9b:1::/48
     v6.startsWith("2001:db8:")
   );
 }
@@ -205,6 +215,12 @@ server.on("connect", async (req, clientSocket, head) => {
   clientSocket.on("error", () => upstream.destroy());
 });
 
-server.listen(PORT, () => {
-  log({ proxy: "listening", port: server.address().port, allowed });
-});
+// Under test the file is `require`d for its pure decision helpers; only start
+// the listener when run directly as the sidecar entrypoint.
+if (require.main === module) {
+  server.listen(PORT, () => {
+    log({ proxy: "listening", port: server.address().port, allowed });
+  });
+}
+
+module.exports = { isSpecialAddress, entryMatches, parseEntry };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authMountArgs } from "../../src/workers/runner.js";
+import { authMountArgs, resourceLimitArgs } from "../../src/workers/runner.js";
 
 describe("authMountArgs", () => {
   it("mounts the volume root when no subpath is given", () => {
@@ -27,5 +27,37 @@ describe("authMountArgs", () => {
     expect(
       authMountArgs("vol", [{ containerPath: "/x", subpath: "y", readOnly: true }]),
     ).toEqual(["--mount", "type=volume,src=vol,dst=/x,volume-subpath=y,readonly"]);
+  });
+});
+
+describe("resourceLimitArgs", () => {
+  it("emits the configured ceilings as docker flags", () => {
+    expect(resourceLimitArgs({ memory: "4g", cpus: 2, pids: 512 })).toEqual([
+      "--memory",
+      "4g",
+      "--cpus",
+      "2",
+      "--pids-limit",
+      "512",
+      "--security-opt",
+      "no-new-privileges",
+    ]);
+  });
+
+  it("passes through custom and fractional values", () => {
+    expect(resourceLimitArgs({ memory: "512m", cpus: 1.5, pids: 128 })).toEqual([
+      "--memory",
+      "512m",
+      "--cpus",
+      "1.5",
+      "--pids-limit",
+      "128",
+      "--security-opt",
+      "no-new-privileges",
+    ]);
+  });
+
+  it("always hardens with no-new-privileges regardless of the limits", () => {
+    expect(resourceLimitArgs({ memory: "8g", cpus: 4, pids: 1024 })).toContain("no-new-privileges");
   });
 });

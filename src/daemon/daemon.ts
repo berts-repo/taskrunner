@@ -170,6 +170,12 @@ export class Daemon {
     }
     fs.mkdirSync(paths.runtimeDir, { recursive: true });
     fs.mkdirSync(paths.logsDir, { recursive: true });
+    // The state root holds every ingested transcript and the control socket
+    // that drives workers (spending their stored credentials). Owner-only, so
+    // another local user cannot read the archive or assign tasks. The execute
+    // bit on the root gates traversal into every child dir.
+    fs.chmodSync(paths.root, 0o700);
+    fs.chmodSync(paths.runtimeDir, 0o700);
     acquireLock(paths);
 
     try {
@@ -198,6 +204,7 @@ export class Daemon {
           ...(AUTH_MOUNTS[kind] ? { authMounts: AUTH_MOUNTS[kind] as AuthMount[] } : {}),
           proxyImage: config.egress.proxy_image,
           allowedDomains: ctx.allowedDomains,
+          limits: cfg.limits,
           onEgress: (decision) => {
             record({
               type: "audit.recorded",
@@ -258,6 +265,9 @@ export class Daemon {
         server.once("error", reject);
         server.listen(paths.socketPath, () => resolve());
       });
+      // Owner-only: the socket is an unauthenticated control channel, so its
+      // filesystem permissions are the access boundary.
+      fs.chmodSync(paths.socketPath, 0o600);
       // Only once the socket is accepting: the first backfill can run for
       // minutes, and shims give the daemon a bounded window to become ready.
       daemon.startSweeping();

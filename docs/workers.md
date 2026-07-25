@@ -7,6 +7,10 @@ becomes a worker you can delegate to.
 Each worker names a **harness** — the built-in loop that drives it. A new worker
 usually reuses an existing harness (`codex` or `claude`) with different settings.
 
+Custom workers inherit the same container resource limits as the built-ins
+(memory 4g, cpus 2, pids 512); add a `[worker.<name>.limits]` section to override
+them — see [Configuration](configuration.md).
+
 ## A local, offline model
 
 You can run a worker against a model on your own machine, with no login and no

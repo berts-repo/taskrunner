@@ -61,6 +61,16 @@ export interface AuthMount {
   readOnly?: boolean;
 }
 
+/** Per-container resource ceilings for the worker (see config `limits`). */
+export interface ResourceLimits {
+  /** Docker --memory value, e.g. "4g". */
+  memory: string;
+  /** Fractional CPUs (docker --cpus). */
+  cpus: number;
+  /** Max process/thread count (docker --pids-limit). */
+  pids: number;
+}
+
 interface DockerRunnerOptions {
   /** Host path of the task workspace (a task-local clone). */
   workspaceDir: string;
@@ -74,6 +84,8 @@ interface DockerRunnerOptions {
   proxyImage: string;
   /** Egress allowlist for this turn: worker defaults plus approved additions. */
   allowedDomains: string[];
+  /** Resource ceilings applied to the worker container. */
+  limits: ResourceLimits;
   onEgress?: (decision: EgressDecision) => void;
   dockerCommand?: string;
 }
@@ -98,6 +110,25 @@ export function authMountArgs(volume: string, mounts: AuthMount[]): string[] {
     args.push("--mount", parts.join(","));
   }
   return args;
+}
+
+/**
+ * Docker flags that bound a worker container. The resource ceilings come from
+ * config; `no-new-privileges` is unconditional hardening — the non-root worker
+ * user never needs to escalate, so denying it costs nothing and blocks setuid
+ * escalation from anything the turn runs.
+ */
+export function resourceLimitArgs(limits: ResourceLimits): string[] {
+  return [
+    "--memory",
+    limits.memory,
+    "--cpus",
+    String(limits.cpus),
+    "--pids-limit",
+    String(limits.pids),
+    "--security-opt",
+    "no-new-privileges",
+  ];
 }
 
 function docker(
@@ -148,6 +179,7 @@ export class DockerRunner implements WorkerRunner {
       "--rm",
       "--name",
       this.workerName,
+      ...resourceLimitArgs(this.options.limits),
       "--network",
       this.networkName,
       "-v",

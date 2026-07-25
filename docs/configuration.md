@@ -17,6 +17,11 @@ image = "taskrunner/codex-worker"
 auth_volume = "taskrunner-codex-home"
 allowed_domains = ["api.openai.com", "auth.openai.com", "chatgpt.com", "*.chatgpt.com"]
 
+[worker.codex.limits]         # resource ceilings for this worker's container
+memory = "4g"                 # Docker kills the container if it exceeds this
+cpus = 2                      # fractional allowed, e.g. 1.5
+pids = 512                    # cap on processes/threads (guards fork bombs)
+
 [egress]
 proxy_image = "taskrunner/egress-proxy"
 
@@ -42,6 +47,11 @@ the built-in codex ingest source scans `["~/.codex/sessions"]`.
 
 ## Good to know
 
+- **Every worker has resource limits.** The `[worker.<name>.limits]` ceilings
+  (memory 4g, cpus 2, pids 512 by default) apply to built-in and custom workers
+  alike. They bound a runaway turn — Docker stops the container at the limit
+  instead of your machine grinding to a halt. Raise them for heavy builds, lower
+  them for tighter isolation.
 - **Typos fail loudly.** Unknown keys are rejected, not ignored — so a misspelled
   setting stops the config from loading instead of silently doing nothing.
 - **Worker transcripts aren't configured here.** A source is always a set of *host*

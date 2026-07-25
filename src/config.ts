@@ -20,6 +20,22 @@ const workerSchema = z.object({
   auth_volume: z.string().optional(),
   /** Egress allowlist defaults: the worker's own API domains. */
   allowed_domains: z.array(z.string()).default([]),
+  /**
+   * Per-container resource ceilings. A worker runs delegated (and in Docker,
+   * unsandboxed) code, so these bound the blast radius of a runaway turn:
+   * Docker kills the container at the limit instead of the host freezing.
+   * Inherited by built-in and custom workers alike.
+   */
+  limits: z
+    .object({
+      /** Docker --memory value, e.g. "4g", "512m". */
+      memory: z.string().default("4g"),
+      /** Fractional CPUs (docker --cpus), e.g. 2 or 1.5. */
+      cpus: z.number().positive().default(2),
+      /** Max process/thread count (docker --pids-limit), guards fork bombs. */
+      pids: z.number().int().positive().default(512),
+    })
+    .default({}),
 });
 
 export type WorkerConfig = z.infer<typeof workerSchema>;
