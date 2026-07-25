@@ -25,6 +25,8 @@ interface Harness {
   stateFile: string;
   /** What was observable at each flush, in order. */
   flushes: { loggedMessages: number; offsetsPersisted: boolean }[];
+  /** Diagnostics the sweeper emitted, captured instead of hitting stderr. */
+  logs: string[];
   messageCount(): number;
   loggedMessages(): number;
 }
@@ -45,6 +47,7 @@ function harness(): Harness {
     return event;
   };
   const flushes: { loggedMessages: number; offsetsPersisted: boolean }[] = [];
+  const logs: string[] = [];
   const sources: IngestSource[] = [{ format: "claude-code", dirs: [sourceDir] }];
   const sweeper = new TranscriptSweeper({
     sources,
@@ -60,6 +63,8 @@ function harness(): Harness {
       });
     },
     stateFile,
+    // Capture diagnostics so expected-error tests don't spam the test output.
+    onLog: (message) => logs.push(message),
   });
   return {
     sweeper,
@@ -68,6 +73,7 @@ function harness(): Harness {
     transcript,
     stateFile,
     flushes,
+    logs,
     messageCount: () =>
       (index.db.prepare("SELECT COUNT(*) AS n FROM messages").get() as { n: number }).n,
     loggedMessages: () =>
@@ -208,6 +214,8 @@ interface VolumeHarness {
   /** The transcript file inside the simulated volume backing store. */
   volumeFile: string;
   copyVolume: ReturnType<typeof vi.fn>;
+  /** Diagnostics the sweeper emitted, captured instead of hitting stderr. */
+  logs: string[];
   messageCount(): number;
 }
 
@@ -247,6 +255,7 @@ function volumeHarness(sourcesOverride?: IngestSource[]): VolumeHarness {
   const sources: IngestSource[] = sourcesOverride ?? [
     { format: "claude-code", volume: "taskrunner-claude-home", subdir, image: "img" },
   ];
+  const logs: string[] = [];
   const sweeper = new TranscriptSweeper({
     sources,
     index,
@@ -255,12 +264,15 @@ function volumeHarness(sourcesOverride?: IngestSource[]): VolumeHarness {
     stateFile: join(root, "ingest-state.json"),
     stagingDir: join(root, "ingest-staging"),
     copyVolume,
+    // Capture diagnostics so expected-error tests don't spam the test output.
+    onLog: (message) => logs.push(message),
   });
   return {
     sweeper,
     index,
     volumeFile,
     copyVolume,
+    logs,
     messageCount: () =>
       (index.db.prepare("SELECT COUNT(*) AS n FROM messages").get() as { n: number }).n,
   };
@@ -306,6 +318,7 @@ describe("TranscriptSweeper volume sources", () => {
     expect(stats.errors).toBe(1);
     expect(stats.recorded).toBe(0);
     expect(h.messageCount()).toBe(0);
+    expect(h.logs.some((l) => l.includes("docker not available"))).toBe(true);
 
     // Recovers on the next sweep once copy-out works again.
     const ok = await h.sweeper.sweep();
@@ -325,5 +338,6 @@ describe("TranscriptSweeper volume sources", () => {
     expect(stats.errors).toBe(1);
     expect(h.copyVolume).not.toHaveBeenCalled();
     expect(h.messageCount()).toBe(0);
+    expect(h.logs.some((l) => l.includes(`has no ${_what}`))).toBe(true);
   });
 });
