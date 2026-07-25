@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { lookupTask, searchTranscripts } from "../../src/daemon/lookup.js";
+import { lookupSession, lookupTask, searchTranscripts } from "../../src/daemon/lookup.js";
+import { getSessionMessages, listSessions, searchMessages } from "../../src/domain/tasks.js";
 import { ArtifactStore } from "../../src/storage/artifacts.js";
 import type { EventBody, LogEvent } from "../../src/storage/events.js";
 import { rebuildIndex, StateIndex } from "../../src/storage/index.js";
@@ -32,6 +33,7 @@ function message(over: Partial<Extract<EventBody, { type: "message.recorded" }>>
     kind: over.kind ?? "message",
     content: over.content ?? "",
     native_ts: over.native_ts,
+    ...(over.project_path ? { project_path: over.project_path } : {}),
   } as EventBody;
 }
 
@@ -42,14 +44,15 @@ function seededIndex(): { index: StateIndex; deps: { index: StateIndex; artifact
     { type: "task.created", task_id: "t1", project_id: "p1", worker: "codex", prompt_summary: "build a widget" },
     { type: "turn.started", turn_id: "turn1", task_id: "t1", prompt: "build a widget" },
     { type: "worker-session.recorded", worker_session_id: "ws1", task_id: "t1", worker: "codex", native_session_id: "sess-A" },
-    message({ role: "user", kind: "message", content: "please build the widget", native_ts: ts() }),
+    message({ role: "user", kind: "message", content: "please build the widget", native_ts: ts(), project_path: "/repo" }),
     message({
       role: "assistant",
       kind: "tool_use",
       content: JSON.stringify({ id: "tu1", name: "Bash", input: { command: "ls -la" } }),
       native_ts: ts(),
+      project_path: "/repo",
     }),
-    message({ role: "assistant", kind: "message", content: "done building the widget", native_ts: ts() }),
+    message({ role: "assistant", kind: "message", content: "done building the widget", native_ts: ts(), project_path: "/repo" }),
     // A host-session message: archived, matches search, but not linked to a task.
     message({
       source: "claude-code",
@@ -58,6 +61,7 @@ function seededIndex(): { index: StateIndex; deps: { index: StateIndex; artifact
       kind: "message",
       content: "unrelated host chatter about a widget",
       native_ts: ts(),
+      project_path: "/host",
     }),
   ];
   const index = rebuildIndex(":memory:", events.map(toLogEvent));
@@ -168,5 +172,145 @@ describe("search-transcripts (Part B)", () => {
     const index = rebuildIndex(":memory:", events.map(toLogEvent));
     const out = searchTranscripts(index, "uniquephrase", 20);
     expect(out).toContain("transcript matches (1)");
+  });
+
+  it("shows the project on each hit and filters by project", () => {
+    const { index } = seededIndex();
+    const all = searchTranscripts(index, "widget", 20);
+    expect(all).toContain("/repo"); // worker hit's project
+    expect(all).toContain("/host"); // host hit's project
+    const scoped = searchTranscripts(index, "widget", 20, { project: "/host" });
+    expect(scoped).toContain("host-1");
+    expect(scoped).not.toContain("task t1"); // /repo worker hits excluded
+  });
+
+  it("scopes to specific sessions and to the last N sessions", () => {
+    const { index } = seededIndex();
+    // Only the host session id: the worker "widget" hits drop out.
+    const bySession = searchMessages(index, "widget", 20, { sessions: ["host-1"] });
+    expect(bySession.every((h) => h.native_session_id === "host-1")).toBe(true);
+    // host-1 is the most recent session; last-1 keeps only it.
+    const byLast = searchMessages(index, "widget", 20, { lastSessions: 1 });
+    expect(byLast.every((h) => h.native_session_id === "host-1")).toBe(true);
+  });
+
+  it("filters by role and kind", () => {
+    const { index } = seededIndex();
+    const users = searchMessages(index, "widget", 20, { role: "user" });
+    expect(users.length).toBeGreaterThan(0);
+    expect(users.every((h) => h.role === "user")).toBe(true);
+    const tools = searchMessages(index, "ls", 20, { kind: "tool_use" });
+    expect(tools.every((h) => h.kind === "tool_use")).toBe(true);
+  });
+
+  it("returns no hits when scoped to a session set that has none", () => {
+    const { index } = seededIndex();
+    expect(searchMessages(index, "widget", 20, { sessions: [] })).toEqual([]);
+  });
+});
+
+describe("lookup-session (Part C)", () => {
+  it("lists ingested sessions most-recent first, with project and task link", () => {
+    const { index } = seededIndex();
+    const out = lookupSession(index, {});
+    expect(out).toContain("sessions (2)");
+    // host-1 was seeded last (newest), so it lists before sess-A.
+    expect(out.indexOf("host-1")).toBeLessThan(out.indexOf("sess-A"));
+    expect(out).toContain("[task t1]"); // sess-A is linked to a task
+    expect(out).toContain("/repo");
+    expect(out).toContain("/host");
+  });
+
+  it("filters the list by project", () => {
+    const { index } = seededIndex();
+    const out = lookupSession(index, { project: "/host" });
+    expect(out).toContain("host-1");
+    expect(out).not.toContain("sess-A");
+  });
+
+  it("reads a host session's full history in order (no task needed)", () => {
+    const { index } = seededIndex();
+    const out = lookupSession(index, { sessionId: "host-1" });
+    expect(out).toContain("session host-1 (claude-code, /host)");
+    expect(out).toContain("unrelated host chatter about a widget");
+  });
+
+  it("reads a worker session by id too, chronologically", () => {
+    const { index } = seededIndex();
+    const out = lookupSession(index, { sessionId: "sess-A" });
+    const userAt = out.indexOf("please build the widget");
+    const doneAt = out.indexOf("done building the widget");
+    expect(userAt).toBeGreaterThan(-1);
+    expect(userAt).toBeLessThan(doneAt);
+  });
+
+  it("caps a session read with scope.last, keeping the newest", () => {
+    const { index } = seededIndex();
+    const out = lookupSession(index, { sessionId: "sess-A", scope: { last: 1 } });
+    expect(out).toContain("done building the widget");
+    expect(out).not.toContain("please build the widget");
+    expect(out).toContain("capped at 1 messages");
+  });
+
+  it("errors for an unknown session id", () => {
+    const { index } = seededIndex();
+    expect(() => lookupSession(index, { sessionId: "nope" })).toThrowError(/no ingested/);
+  });
+
+  it("lists candidates when a bare id spans multiple sources", () => {
+    const events: EventBody[] = [
+      { type: "project.created", project_id: "p1", root: "/repo" },
+      message({ source: "codex", native_session_id: "dup-id", content: "from codex", native_ts: ts() }),
+      message({ source: "claude-code", native_session_id: "dup-id", content: "from claude", native_ts: ts() }),
+    ];
+    const index = rebuildIndex(":memory:", events.map(toLogEvent));
+    const out = lookupSession(index, { sessionId: "dup-id" });
+    expect(out).toContain("matches 2 sources");
+    expect(out).toContain("source=codex");
+    expect(out).toContain("source=claude-code");
+    // Disambiguating by source reads it.
+    const one = lookupSession(index, { sessionId: "dup-id", source: "codex" });
+    expect(one).toContain("from codex");
+    expect(one).not.toContain("from claude");
+  });
+});
+
+describe("transcript_sessions aggregate", () => {
+  it("counts a session's messages and is idempotent across a re-sweep", () => {
+    const dup = message({
+      native_session_id: "sess-A",
+      native_record_id: "rec-dup",
+      content: "once",
+      native_ts: ts(),
+    });
+    const events: EventBody[] = [
+      { type: "project.created", project_id: "p1", root: "/repo" },
+      message({ native_session_id: "sess-A", native_record_id: "r1", content: "a", native_ts: ts() }),
+      dup,
+      dup, // re-swept identical message: must not double-count
+    ];
+    const index = rebuildIndex(":memory:", events.map(toLogEvent));
+    const [session] = listSessions(index, { nativeSessionId: "sess-A" });
+    expect(session?.message_count).toBe(2);
+  });
+
+  it("is reconstructed identically by a rebuild from the log", () => {
+    const events: EventBody[] = [
+      { type: "project.created", project_id: "p1", root: "/repo" },
+      message({ native_session_id: "sess-A", native_record_id: "r1", content: "a", native_ts: ts(), project_path: "/repo" }),
+      message({ native_session_id: "sess-A", native_record_id: "r2", content: "b", native_ts: ts(), project_path: "/repo" }),
+      message({ source: "claude-code", native_session_id: "host-1", native_record_id: "h1", content: "c", native_ts: ts(), project_path: "/host" }),
+    ].map(toLogEvent);
+    const a = rebuildIndex(":memory:", events);
+    const b = rebuildIndex(":memory:", events);
+    const norm = (idx: StateIndex) => JSON.stringify(listSessions(idx, {}));
+    expect(norm(a)).toBe(norm(b));
+  });
+
+  it("getSessionMessages reads only the requested session", () => {
+    const { index } = seededIndex();
+    const { messages } = getSessionMessages(index, "claude-code", "host-1");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toContain("host chatter");
   });
 });

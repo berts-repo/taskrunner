@@ -60,7 +60,9 @@ taskrunner doctor
 logins, the firewall image, and the archive's health — and tells you exactly what's
 missing. Run it whenever a worker won't start.
 
-Other commands: `taskrunner up | down | status | doctor | mcp`. Add
+Other commands: `taskrunner up | down | status | doctor | mcp`, plus the read-only
+query commands `sessions | session | search | task | tasks` for reading the archive
+from your shell (see [Conversation archive](transcripts.md#from-the-terminal)). Add
 `--state-root <dir>` to point at a different state directory.
 
 ## Run the tests (optional)

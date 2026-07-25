@@ -5,7 +5,8 @@ import type { Config } from "../config.js";
 import { ToolError } from "../domain/errors.js";
 import type { StatePaths } from "../paths.js";
 import { renderCancel, renderOutcome } from "../render.js";
-import { lookupTask, searchTranscripts } from "./lookup.js";
+import { lookupSession, lookupTask, searchTranscripts } from "./lookup.js";
+import type { SearchFilters } from "../domain/tasks.js";
 import type { ArtifactStore } from "../storage/artifacts.js";
 import type { EventBody, LogEvent } from "../storage/events.js";
 import type { StateIndex } from "../storage/index.js";
@@ -25,6 +26,10 @@ export interface ToolContext {
   sessionId: string;
   /** Records session.started once; safe to call on every tool dispatch. */
   ensureSessionStarted: () => void;
+  /** Sweeps host transcript dirs on demand (skips the worker-volume copy-out),
+   * so a session-recency query reflects the live conversation. Coalesces with
+   * any in-flight sweep. */
+  sweepHostTranscripts: () => Promise<unknown>;
 }
 
 type ToolResult = CallToolResult;
@@ -66,9 +71,11 @@ function buildInstructions(config: Config): string {
       "fetches status, output, and audit records; continue-task sends a follow-up prompt to " +
       "an existing task; cancel-task stops a running turn.",
     "",
-    "Transcripts: worker turns and host agent sessions are archived. lookup-task with " +
-      'include ["transcript"] returns one task\'s worker interior; search-transcripts ' +
-      "full-text searches the whole ingested corpus.",
+    "Transcripts: worker turns and host agent sessions are archived. lookup-session " +
+      "lists recent sessions (or one session's full history by id), including host " +
+      'sessions no task links; lookup-task with include ["transcript"] returns one ' +
+      "task's worker interior; search-transcripts full-text searches the whole ingested " +
+      "corpus, optionally scoped to a project, sessions, the last N sessions, or a time window.",
     "",
     "Worker credentials live in Docker volumes on this host. If a turn fails with a " +
       "login or auth error, the user must re-run the worker login procedure on the host " +
@@ -210,14 +217,71 @@ export function createMcpServer(ctx: ToolContext): McpServer {
   );
 
   tool(
+    "lookup-session",
+    "Browse ingested transcript sessions (one conversation = one Claude Code / " +
+      "Codex session). With no sessionId: lists sessions most-recent first, " +
+      "optionally filtered to a project. With a sessionId: returns that session's " +
+      "full history in order — including host sessions no task links (unlike " +
+      "lookup-task's transcript). scope.last caps the messages shown. Freshly " +
+      "sweeps host transcripts first, so the newest session reflects the live " +
+      "conversation up to its last flushed line.",
+    {
+      sessionId: z
+        .string()
+        .optional()
+        .describe("Native session id to read; omit to list recent sessions"),
+      project: z
+        .string()
+        .optional()
+        .describe("Absolute project path filter (applies to the session list)"),
+      source: z
+        .string()
+        .optional()
+        .describe("Disambiguate a sessionId shared across sources, e.g. 'claude-code'"),
+      limit: z.number().int().positive().max(100).optional().describe("Max sessions to list"),
+      scope: z
+        .object({ last: z.number().int().positive().optional().describe("Last N messages") })
+        .optional(),
+    },
+    async (args) => {
+      await ctx.sweepHostTranscripts();
+      return lookupSession(ctx.index, args);
+    },
+  );
+
+  tool(
     "search-transcripts",
-    "Full-text search across every ingested transcript — the archived interior of " +
+    "Full-text search across ingested transcripts — the archived interior of " +
       "delegated worker turns and host agent sessions. Returns matching messages " +
-      "with a snippet, attributed to a task where the message came from a linked " +
-      "worker session. Query uses SQLite FTS5 syntax: bare words are ANDed, " +
-      '"quoted text" matches a phrase.',
+      "with a snippet, project, and session, attributed to a task where the message " +
+      "came from a linked worker session. Query uses SQLite FTS5 syntax: bare words " +
+      'are ANDed, "quoted text" matches a phrase. Optional filters scope the search ' +
+      "to a project, specific sessions, the last N sessions, a time window, or a " +
+      "role/kind; sort by relevance (default) or recency.",
     {
       query: z.string().describe("FTS5 search expression"),
+      project: z.string().optional().describe("Restrict to this absolute project path"),
+      sessions: z
+        .array(z.string())
+        .optional()
+        .describe("Restrict to these native session ids"),
+      lastSessions: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Restrict to the most-recent N sessions (within project when set)"),
+      since: z.string().optional().describe("Only messages with native_ts >= this ISO timestamp"),
+      until: z.string().optional().describe("Only messages with native_ts <= this ISO timestamp"),
+      role: z.string().optional().describe("Restrict to one role, e.g. 'user'"),
+      kind: z
+        .string()
+        .optional()
+        .describe("Restrict to one kind, e.g. 'message' | 'tool_use' | 'reasoning'"),
+      sort: z
+        .enum(["rank", "recent"])
+        .optional()
+        .describe("'rank' relevance (default) or 'recent' newest-first"),
       limit: z
         .number()
         .int()
@@ -226,7 +290,21 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         .optional()
         .describe("Max hits to return (default 20)"),
     },
-    async (args) => searchTranscripts(ctx.index, args.query, args.limit ?? 20),
+    async (args) => {
+      const filters: SearchFilters = {
+        ...(args.project !== undefined ? { project: args.project } : {}),
+        ...(args.sessions !== undefined ? { sessions: args.sessions } : {}),
+        ...(args.lastSessions !== undefined ? { lastSessions: args.lastSessions } : {}),
+        ...(args.since !== undefined ? { since: args.since } : {}),
+        ...(args.until !== undefined ? { until: args.until } : {}),
+        ...(args.role !== undefined ? { role: args.role } : {}),
+        ...(args.kind !== undefined ? { kind: args.kind } : {}),
+        ...(args.sort !== undefined ? { sort: args.sort } : {}),
+      };
+      // lastSessions ranks by recency, so refresh host sessions first.
+      if (args.lastSessions !== undefined) await ctx.sweepHostTranscripts();
+      return searchTranscripts(ctx.index, args.query, args.limit ?? 20, filters);
+    },
   );
 
   tool(

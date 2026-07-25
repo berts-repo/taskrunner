@@ -25,13 +25,42 @@ edits them, so your agents' own session-resume keeps working.
 
 ## Reading it back
 
-Two ways, both through your agent:
+Three ways through your agent, depending on what you're after:
 
+- **Browse whole conversations** — `lookup-session` lists your recent sessions
+  (newest first, optionally within one project), so you can ask for "the last session"
+  or "look through my last five". Give it a session id and you get that entire
+  conversation in order. This is the only way to read back **your own host sessions** —
+  they aren't tied to a task, so `lookup-task` can't see them. The most recent
+  transcripts are swept in on demand when you ask, so "the last session" reflects the
+  conversation you were just in, up to its last saved line.
 - **One task's interior** — ask `lookup-task` to include the **transcript**. You get
   the tool calls, reasoning, and messages that ran inside that task's container.
 - **Search everything** — `search-transcripts` runs a full-text search across the
   whole archive (worker turns *and* your host sessions) and returns matching messages
-  with a snippet. When a match came from a delegated task, it tells you which one.
+  with a snippet and their project. When a match came from a delegated task, it tells
+  you which one. You can scope a search to a project, to specific or recent sessions,
+  to a time window, or to a kind of message — handy for "find where I discussed X in my
+  last few sessions".
+
+### From the terminal
+
+You don't need an agent to read the archive. The same lookups are available as
+commands, printing straight to your shell — useful for a quick grep without spending a
+conversation:
+
+```sh
+taskrunner sessions                     # your recent sessions, newest first
+taskrunner sessions --project /path      # just this project
+taskrunner session <id>                  # one conversation in full
+taskrunner search "flaky proxy test"     # full-text search
+taskrunner search "proxy" --last-sessions 5   # …within your last 5 sessions
+taskrunner task <id> --include transcript     # one task's interior
+taskrunner tasks --project /path              # a project's recent tasks
+```
+
+Each command talks to the running daemon; if it isn't up yet, your agent's next
+request (or `taskrunner up`) starts it.
 
 ## Where logins and transcripts are stored (worth understanding)
 

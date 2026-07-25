@@ -41,8 +41,8 @@ login, is in the getting-started guide.
 
 - **[Getting started](docs/getting-started.md)** — install, build the worker images,
   sign workers in, register with your agent, and run the health check.
-- **[Using Taskrunner](docs/tools.md)** — the five tools your agent uses to delegate,
-  follow up, inspect, cancel, and search.
+- **[Using Taskrunner](docs/tools.md)** — the tools your agent uses to delegate,
+  follow up, inspect, cancel, browse sessions, and search.
 - **[Configuration](docs/configuration.md)** — the optional `config.toml` and every
   setting with its default.
 - **[Network access](docs/network-access.md)** — how the firewall works and how to

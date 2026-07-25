@@ -11,36 +11,82 @@ import { VERSION } from "./version.js";
 const USAGE = `Usage: taskrunner <command> [args] [--state-root <dir>]
 
 Commands:
-  up      Start the Taskrunner daemon in the foreground.
-  down    Stop the running daemon.
-  status  Report daemon status.
-  doctor  Diagnose Docker, worker images/auth, and ingestion health.
-  mcp     Run the stdio MCP shim (auto-starts the daemon).
+  up        Start the Taskrunner daemon in the foreground.
+  down      Stop the running daemon.
+  status    Report daemon status.
+  doctor    Diagnose Docker, worker images/auth, and ingestion health.
+  mcp       Run the stdio MCP shim (auto-starts the daemon).
+
+Query (read the ingested corpus without an MCP session):
+  sessions [--project P] [--limit N]
+              List ingested transcript sessions, most recent first.
+  session <id> [--source S] [--last N]
+              Print one session's full history (host or worker session).
+  search "<fts>" [--project P] [--sessions a,b] [--last-sessions N]
+                 [--role R] [--kind K] [--since T] [--until T]
+                 [--sort rank|recent] [--limit N]
+              Full-text search across transcripts.
+  task <id> [--include turns,trace,audit,artifacts,diff,transcript]
+            [--turn <turnId>] [--last N]
+              Look up one task; tasks --project P lists a project's tasks.
 `;
 
 interface Args {
   command: string | undefined;
-  /** Positional arguments after the command (e.g. hub <agent>). */
+  /** Positional arguments after the command (e.g. session <id>). */
   rest: string[];
+  /** `--key value` options after the command. */
+  flags: Record<string, string>;
   paths: StatePaths;
 }
 
 function parseArgs(argv: string[]): Args {
   let command: string | undefined;
   const rest: string[] = [];
+  const flags: Record<string, string> = {};
   let root = process.env["TASKRUNNER_STATE_ROOT"];
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+    const arg = argv[i] as string;
     if (arg === "--state-root") {
       root = argv[++i];
       if (!root) throw new Error("--state-root requires a directory argument");
+    } else if (arg.startsWith("--")) {
+      const value = argv[++i];
+      if (value === undefined) throw new Error(`${arg} requires a value`);
+      flags[arg.slice(2)] = value;
     } else if (command === undefined) {
       command = arg;
     } else {
-      rest.push(arg as string);
+      rest.push(arg);
     }
   }
-  return { command, rest, paths: root ? statePaths(root) : statePaths() };
+  return { command, rest, flags, paths: root ? statePaths(root) : statePaths() };
+}
+
+/**
+ * Fetches a read-only query route from the daemon over the control socket and
+ * prints the plain-text body. Mirrors `status`: a down daemon is a soft failure.
+ */
+async function readQuery(paths: StatePaths, path: string, params: Record<string, string | undefined>): Promise<number> {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") qs.set(key, value);
+  }
+  const agent = new Agent({ connect: { socketPath: paths.socketPath } });
+  try {
+    const res = await undiciFetch(`http://taskrunner${path}?${qs.toString()}`, {
+      dispatcher: agent,
+      signal: AbortSignal.timeout(30_000),
+    });
+    const text = await res.text();
+    process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+    return res.ok ? 0 : 1;
+  } catch {
+    process.stdout.write("taskrunner daemon is not running\n");
+    return 1;
+  } finally {
+    await agent.close();
+  }
 }
 
 async function up(paths: StatePaths): Promise<number> {
@@ -147,6 +193,60 @@ async function main(argv: string[]): Promise<number> {
       await runShim(args.paths);
       // The shim owns the process from here; it exits via its own shutdown.
       return await new Promise<never>(() => {});
+    case "sessions":
+      return readQuery(args.paths, "/lookup-session", {
+        project: args.flags["project"],
+        limit: args.flags["limit"],
+      });
+    case "session": {
+      const id = args.rest[0];
+      if (!id) {
+        process.stderr.write("taskrunner: session <id> requires a session id\n");
+        return 1;
+      }
+      return readQuery(args.paths, "/lookup-session", {
+        sessionId: id,
+        source: args.flags["source"],
+        last: args.flags["last"],
+      });
+    }
+    case "search": {
+      const query = args.rest[0];
+      if (!query) {
+        process.stderr.write('taskrunner: search "<fts>" requires a query\n');
+        return 1;
+      }
+      return readQuery(args.paths, "/search-transcripts", {
+        query,
+        project: args.flags["project"],
+        sessions: args.flags["sessions"],
+        lastSessions: args.flags["last-sessions"],
+        role: args.flags["role"],
+        kind: args.flags["kind"],
+        since: args.flags["since"],
+        until: args.flags["until"],
+        sort: args.flags["sort"],
+        limit: args.flags["limit"],
+      });
+    }
+    case "task": {
+      const id = args.rest[0];
+      if (!id) {
+        process.stderr.write("taskrunner: task <id> requires a task id\n");
+        return 1;
+      }
+      return readQuery(args.paths, "/lookup-task", {
+        taskId: id,
+        include: args.flags["include"],
+        turnId: args.flags["turn"],
+        last: args.flags["last"],
+      });
+    }
+    case "tasks":
+      return readQuery(args.paths, "/lookup-task", {
+        project: args.flags["project"],
+        limit: args.flags["limit"],
+      });
     case undefined:
     case "help":
     case "--help":

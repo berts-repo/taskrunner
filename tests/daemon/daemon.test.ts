@@ -48,6 +48,39 @@ describe("Daemon", () => {
     expect(existsSync(paths.lockFile)).toBe(false);
   });
 
+  it("serves read-only query routes over the socket", async () => {
+    const paths = statePaths(tempDir("daemon"));
+    const daemon = await startDaemon(paths.root);
+    daemon.record({ type: "project.created", project_id: "p1", root: "/repo" });
+    daemon.record({
+      type: "message.recorded",
+      message_id: "m1",
+      source: "claude-code",
+      native_session_id: "host-9",
+      native_record_id: "r1",
+      role: "user",
+      kind: "message",
+      content: "hunt for the flux capacitor",
+      native_ts: "2026-07-24T00:00:01.000Z",
+      project_path: "/repo",
+    });
+    const f = unixFetch(paths.socketPath);
+
+    const sessions = await f("http://taskrunner/lookup-session");
+    expect(sessions.status).toBe(200);
+    expect(await sessions.text()).toContain("host-9");
+
+    const history = await f("http://taskrunner/lookup-session?sessionId=host-9");
+    expect(await history.text()).toContain("flux capacitor");
+
+    const search = await f("http://taskrunner/search-transcripts?query=flux");
+    expect(await search.text()).toContain("host-9");
+
+    // A missing required query param is a client error, not a crash.
+    const bad = await f("http://taskrunner/search-transcripts");
+    expect(bad.status).toBe(400);
+  });
+
   it("refuses a second daemon on the same state root", async () => {
     const root = tempDir("daemon");
     await startDaemon(root);

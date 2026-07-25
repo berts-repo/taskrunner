@@ -15,8 +15,8 @@ maintainer reference — the "why it's built this way" behind the features descr
   updates).
 - **The daemon rebuilds the index from the log on every boot.** This is why a schema
   change is safe with no migration step: bump `SCHEMA_VERSION` and the next start
-  repopulates a fresh index from `events.jsonl`. (Most recently, bumping 4 → 5 to add
-  the `messages_fts` search table needed no migration for exactly this reason.)
+  repopulates a fresh index from `events.jsonl`. (Most recently, bumping 5 → 6 to add
+  the `transcript_sessions` aggregate needed no migration for exactly this reason.)
 - **Artifacts are content-addressed.** Diffs and raw worker event streams are stored
   by hash, referenced from the index.
 
@@ -79,6 +79,38 @@ table for search.
 - **Byte offsets are a cache only.** `~/.taskrunner/ingest-state.json` records how far
   each source was read to make resumption incremental; deleting it forces a harmless
   full re-scan, and the event log stays the sole source of truth.
+- **Session aggregate.** A `transcript_sessions` table holds one row per distinct
+  `(source, native_session_id)` — project, first/last timestamp, message count —
+  maintained by the same `message.recorded` fold, **inside the same `res.changes > 0`
+  guard** as the FTS insert so a re-swept message never double-counts. It exists so
+  listing sessions by recency is O(sessions) rather than a `GROUP BY` over all of
+  `messages`; recency orders by `COALESCE(last_ts, last_recorded_at)` (formats without
+  a per-record timestamp still order by ingest time). Like everything here it is
+  derived — a delete-and-rebuild replays the log and reconstructs it exactly.
+
+### Query surface
+
+- **`lookup-session`** lists sessions from `transcript_sessions` (recency, optional
+  project filter, task link via a correlated `worker_sessions` subquery so a
+  multi-task session stays one row), or reads one session's messages straight from
+  `messages` keyed on `(source, native_session_id)` — so a host session no task links
+  is still readable. A bare id matching several sources lists candidates rather than
+  guessing.
+- **Scoped `search-transcripts`.** `searchMessages` builds its `WHERE` dynamically over
+  `messages_fts` (still `messages_fts MATCH ?` even when aliased) joined 1:1 to
+  `messages` on the unique `message_id` — the join is what carries `project_path` into
+  a hit and lets `project` filter. `sessions`/`lastSessions` add `native_session_id IN
+  (…)` (the latter resolved through `listSessions`); `role`/`kind`/`since`/`until`
+  filter the FTS row's UNINDEXED columns; `sort:"recent"` orders by `native_ts` instead
+  of `rank`.
+- **On-demand host sweep.** Session-recency queries call `sweep({ hostOnly: true })`
+  first — it skips volume sources (no `docker cp`), so the newest host session reflects
+  the live conversation without paying for a worker-volume copy-out. Coalescing is
+  first-caller-wins; the interval sweep still reaches the volumes.
+- **CLI parity.** The daemon serves read-only routes (`/lookup-session`,
+  `/search-transcripts`, `/lookup-task`) over the control socket that call the *same*
+  renderers as the tools, so `taskrunner sessions|session|search|task|tasks` print
+  byte-identical output without opening an MCP session.
 
 ### Sweeper invariants (load-bearing)
 

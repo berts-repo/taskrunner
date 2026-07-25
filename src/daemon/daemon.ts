@@ -17,6 +17,9 @@ import type { WorkerHarness } from "../workers/harness.js";
 import { DockerRunner, type AuthMount, type WorkerRunner } from "../workers/runner.js";
 import { CloneWorkspaces } from "../workspace/clone.js";
 import { createMcpServer, type ToolContext } from "./mcp-server.js";
+import { lookupSession, lookupTask, searchTranscripts } from "./lookup.js";
+import { ToolError } from "../domain/errors.js";
+import type { SearchFilters } from "../domain/tasks.js";
 import { Scheduler, type RunnerContext, type WorkspaceProvider } from "./scheduler.js";
 
 export interface DaemonOptions {
@@ -80,6 +83,10 @@ const TRANSCRIPT_FORMAT: Record<string, string> = {
   codex: "codex",
   claude: "claude-code",
 };
+
+// Read-only query routes the CLI reaches over the control socket. Each maps to
+// the same renderer a tool calls, so terminal output matches MCP output.
+const READ_ROUTES = new Set(["/lookup-session", "/search-transcripts", "/lookup-task"]);
 
 /**
  * Resolves the transcript sources the sweeper ingests: the configured host
@@ -340,8 +347,92 @@ export class Daemon {
       await this.handleMcp(req, res);
       return;
     }
+    // Read-only query routes: the CLI hits these over the socket so a session /
+    // task / search lookup runs in a terminal without spending an MCP session.
+    // They call the exact same renderers as the tools, so output is identical.
+    if (req.method === "GET" && READ_ROUTES.has(url.pathname)) {
+      await this.handleRead(url, res);
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not_found" }));
+  }
+
+  private async handleRead(url: URL, res: http.ServerResponse): Promise<void> {
+    try {
+      const text = await this.renderRead(url);
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end(text.endsWith("\n") ? text : text + "\n");
+    } catch (err) {
+      const code = err instanceof ToolError ? err.code : "internal_error";
+      const status = code === "not_found" ? 404 : code === "invalid_request" ? 400 : 500;
+      res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+      res.end(`error ${code}: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
+  private async renderRead(url: URL): Promise<string> {
+    const q = url.searchParams;
+    const num = (name: string): number | undefined => {
+      const v = q.get(name);
+      if (v === null) return undefined;
+      const n = Number(v);
+      if (!Number.isFinite(n)) throw new ToolError("invalid_request", `${name} must be a number`);
+      return n;
+    };
+    const deps = { index: this.index, artifacts: this.artifacts };
+    switch (url.pathname) {
+      case "/lookup-session": {
+        await this.sweeper.sweep({ hostOnly: true });
+        const last = num("last");
+        return lookupSession(this.index, {
+          ...(q.get("sessionId") ? { sessionId: q.get("sessionId")! } : {}),
+          ...(q.get("project") ? { project: q.get("project")! } : {}),
+          ...(q.get("source") ? { source: q.get("source")! } : {}),
+          ...(num("limit") !== undefined ? { limit: num("limit")! } : {}),
+          ...(last !== undefined ? { scope: { last } } : {}),
+        });
+      }
+      case "/search-transcripts": {
+        const query = q.get("query");
+        if (!query) throw new ToolError("invalid_request", "query is required");
+        const sort = q.get("sort");
+        if (sort !== null && sort !== "rank" && sort !== "recent") {
+          throw new ToolError("invalid_request", "sort must be 'rank' or 'recent'");
+        }
+        const sessions = q.get("sessions");
+        const lastSessions = num("lastSessions");
+        const filters: SearchFilters = {
+          ...(q.get("project") ? { project: q.get("project")! } : {}),
+          ...(sessions ? { sessions: sessions.split(",").filter(Boolean) } : {}),
+          ...(lastSessions !== undefined ? { lastSessions } : {}),
+          ...(q.get("since") ? { since: q.get("since")! } : {}),
+          ...(q.get("until") ? { until: q.get("until")! } : {}),
+          ...(q.get("role") ? { role: q.get("role")! } : {}),
+          ...(q.get("kind") ? { kind: q.get("kind")! } : {}),
+          ...(sort ? { sort: sort as "rank" | "recent" } : {}),
+        };
+        if (lastSessions !== undefined) await this.sweeper.sweep({ hostOnly: true });
+        return searchTranscripts(this.index, query, num("limit") ?? 20, filters);
+      }
+      case "/lookup-task": {
+        const include = q.get("include");
+        const last = num("last");
+        const turnId = q.get("turnId");
+        const scope = turnId ? { turnId } : last !== undefined ? { last } : undefined;
+        return lookupTask(deps, {
+          ...(q.get("taskId") ? { taskId: q.get("taskId")! } : {}),
+          ...(q.get("project") ? { project: q.get("project")! } : {}),
+          ...(include
+            ? { include: include.split(",").filter(Boolean) as Parameters<typeof lookupTask>[1]["include"] }
+            : {}),
+          ...(scope ? { scope } : {}),
+          ...(num("limit") !== undefined ? { limit: num("limit")! } : {}),
+        });
+      }
+      default:
+        throw new ToolError("not_found", `unknown read route ${url.pathname}`);
+    }
   }
 
   private handleStatus(res: http.ServerResponse): void {
@@ -430,6 +521,7 @@ export class Daemon {
       record: (body) => this.record(body),
       sessionId,
       ensureSessionStarted,
+      sweepHostTranscripts: () => this.sweeper.sweep({ hostOnly: true }),
     };
   }
 

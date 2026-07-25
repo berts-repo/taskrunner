@@ -1,13 +1,17 @@
 import { ToolError } from "../domain/errors.js";
 import {
   findProjectByPath,
+  getSessionMessages,
   getTaskMessages,
   getTaskSnapshot,
   getTurnArtifacts,
   getTurnAudit,
+  listSessions,
   listTaskSnapshots,
   listTurns,
   searchMessages,
+  type SearchFilters,
+  type SessionInfo,
   type TaskSnapshot,
   type TurnInfo,
 } from "../domain/tasks.js";
@@ -210,10 +214,15 @@ function renderTranscript(index: StateIndex, taskId: string, cap?: number): stri
 }
 
 /** Corpus-wide transcript search rendered for the search-transcripts tool. */
-export function searchTranscripts(index: StateIndex, query: string, limit: number): string {
+export function searchTranscripts(
+  index: StateIndex,
+  query: string,
+  limit: number,
+  filters: SearchFilters = {},
+): string {
   let hits;
   try {
-    hits = searchMessages(index, query, limit);
+    hits = searchMessages(index, query, limit, filters);
   } catch (err) {
     throw new ToolError(
       "invalid_request",
@@ -224,10 +233,92 @@ export function searchTranscripts(index: StateIndex, query: string, limit: numbe
   const lines = [`transcript matches (${hits.length}):`];
   for (const h of hits) {
     const where = h.task_id ? `task ${h.task_id}` : `${h.source} session ${h.native_session_id}`;
+    const proj = h.project_path ? ` · ${h.project_path}` : "";
     const ts = h.native_ts ? ` · ${h.native_ts}` : "";
-    lines.push(`  ${where} · ${h.role}/${h.kind}${ts}`);
+    lines.push(`  ${where}${proj} · ${h.role}/${h.kind}${ts}`);
     lines.push(`    ${truncate(h.snippet, 200)}`);
   }
+  return lines.join("\n");
+}
+
+interface SessionLookupArgs {
+  sessionId?: string;
+  project?: string;
+  source?: string;
+  limit?: number;
+  scope?: { last?: number };
+}
+
+/**
+ * lookup-session: no sessionId lists ingested transcript sessions most-recent
+ * first (optionally filtered to a project); a sessionId returns that session's
+ * full history in order. Works for host sessions that no task links, unlike
+ * lookup-task's transcript include. A bare id matching several sources is not
+ * guessed — the candidates are listed for the caller to disambiguate.
+ */
+export function lookupSession(index: StateIndex, args: SessionLookupArgs): string {
+  if (!args.sessionId) {
+    const sessions = listSessions(index, {
+      ...(args.project !== undefined ? { project: args.project } : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    });
+    return renderSessionList(sessions);
+  }
+
+  const matches = listSessions(index, { nativeSessionId: args.sessionId, limit: 50 });
+  const candidates = args.source ? matches.filter((m) => m.source === args.source) : matches;
+  if (candidates.length === 0) {
+    const where = args.source ? `${args.source} session` : "session";
+    throw new ToolError("not_found", `no ingested ${where} ${args.sessionId}`);
+  }
+  if (candidates.length > 1) {
+    const lines = [
+      `session id ${args.sessionId} matches ${candidates.length} sources; re-run with source=<one of>:`,
+      ...candidates.map((m) => `  source=${m.source}  (${m.message_count} messages)`),
+    ];
+    return lines.join("\n");
+  }
+  const info = candidates[0]!;
+  const { messages, capped } = getSessionMessages(
+    index,
+    info.source,
+    info.native_session_id,
+    args.scope?.last,
+  );
+  return renderSessionHistory(info, messages, capped);
+}
+
+function renderSessionList(sessions: SessionInfo[]): string {
+  if (sessions.length === 0) return "sessions: (none ingested)";
+  const lines = [`sessions (${sessions.length}):`];
+  for (const s of sessions) {
+    const when = s.last_ts ?? s.last_recorded_at;
+    const proj = s.project_path ?? "(no project)";
+    const task = s.task_id ? `  [task ${s.task_id}]` : "";
+    lines.push(
+      `  ${s.native_session_id}  ${s.source.padEnd(11)}  ${when}  ` +
+        `msgs=${s.message_count}  ${proj}${task}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function renderSessionHistory(
+  info: SessionInfo,
+  messages: { role: string; kind: string; content: string; native_ts: string | null }[],
+  capped: boolean,
+): string {
+  const proj = info.project_path ? `, ${info.project_path}` : "";
+  const lines = [`session ${info.native_session_id} (${info.source}${proj}):`];
+  if (messages.length === 0) {
+    lines.push("  (no messages recorded)");
+    return lines.join("\n");
+  }
+  for (const m of messages) {
+    const ts = m.native_ts ? `${m.native_ts}  ` : "";
+    lines.push(`  ${ts}${m.role}/${m.kind}  ${compactMessageContent(m.content)}`);
+  }
+  if (capped) lines.push(`  … capped at ${messages.length} messages (raise scope.last for more)`);
   return lines.join("\n");
 }
 

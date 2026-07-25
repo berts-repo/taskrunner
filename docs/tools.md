@@ -1,8 +1,9 @@
 # Using Taskrunner
 
 You don't call Taskrunner directly — you ask your coding agent to, and it uses these
-five tools on your behalf. This page explains what each one does so you know what to
-ask for.
+tools on your behalf. This page explains what each one does so you know what to ask
+for. (You can also read the archive straight from a terminal — see
+[From the terminal](transcripts.md#from-the-terminal).)
 
 ## A few terms
 
@@ -14,7 +15,7 @@ ask for.
 - **Artifact** — something a turn produced and Taskrunner saved, such as the diff of
   file changes or the worker's raw activity log.
 
-## The five tools
+## The tools
 
 ### `assign-task` — delegate new work
 
@@ -52,11 +53,23 @@ so it remembers the earlier turns.
 Stops the turn that's currently running. The task, its history, and its workspace are
 kept — nothing is thrown away.
 
+### `lookup-session` — browse whole conversations
+
+Works over **sessions** — a session being one conversation, whether a worker's or one
+of your own host agents. With no id it **lists your recent sessions**, newest first,
+so you can ask for "the last session" or "my last five". Give it a session id and it
+returns that **whole conversation in order** — including your own host sessions, which
+`lookup-task` can't reach because they aren't tied to a task. You can filter the list
+to one project and cap how much of a long session it prints. See
+[Conversation archive](transcripts.md).
+
 ### `search-transcripts` — search everything the workers said
 
 Full-text search across every recorded conversation — both worker turns and your own
-host agent sessions. Returns the matching messages with a snippet, and tells you which
-task a match belongs to when it came from a delegated turn. See
+host agent sessions. Returns the matching messages with a snippet, the project they're
+from, and which task a match belongs to when it came from a delegated turn. You can
+narrow the search to a project, to specific sessions or your last few sessions, to a
+time window, or to a kind of message — and sort by relevance or most-recent. See
 [Conversation archive](transcripts.md).
 
 ## How your agent knows all this

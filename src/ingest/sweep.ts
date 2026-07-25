@@ -97,11 +97,18 @@ export class TranscriptSweeper {
     this.hasMessage = deps.index.db.prepare("SELECT 1 FROM messages WHERE id = ? LIMIT 1");
   }
 
-  /** Runs one sweep, coalescing with any already in flight. */
-  sweep(): Promise<SweepStats> {
+  /**
+   * Runs one sweep, coalescing with any already in flight. `hostOnly` restricts
+   * to host-directory sources (skipping the Docker volume copy-out), so a query
+   * path can cheaply refresh live host transcripts without paying for a full
+   * worker-volume sweep. Coalescing is first-caller-wins: an in-flight hostOnly
+   * sweep can absorb a concurrent full request for that tick — harmless, since
+   * the interval sweep repeats and reaches the volumes on its next run.
+   */
+  sweep(opts: { hostOnly?: boolean } = {}): Promise<SweepStats> {
     if (this.inFlight) return this.inFlight;
     this.inFlight = Promise.resolve()
-      .then(() => this.runSweep())
+      .then(() => this.runSweep(opts))
       .finally(() => {
         this.inFlight = null;
       });
@@ -113,10 +120,14 @@ export class TranscriptSweeper {
     await this.inFlight?.catch(() => {});
   }
 
-  private async runSweep(): Promise<SweepStats> {
+  private async runSweep(opts: { hostOnly?: boolean } = {}): Promise<SweepStats> {
     const state = this.loadState();
     const stats: SweepStats = { filesScanned: 0, recorded: 0, errors: 0 };
-    for (const source of this.deps.sources) {
+    // hostOnly skips volume sources (the ones needing a Docker copy-out).
+    const sources = opts.hostOnly
+      ? this.deps.sources.filter((source) => !source.volume)
+      : this.deps.sources;
+    for (const source of sources) {
       const parser = parserForFormat(source.format);
       if (!parser) {
         this.log(`ingest: no parser for format '${source.format}', skipping`);

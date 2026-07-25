@@ -53,6 +53,7 @@ describe("MCP tool surface", () => {
       "assign-task",
       "cancel-task",
       "continue-task",
+      "lookup-session",
       "lookup-task",
       "search-transcripts",
     ]);

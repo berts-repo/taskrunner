@@ -8,7 +8,7 @@ import type { LogEvent } from "./events.js";
 // so the reducer must be deterministic (event timestamps only, no wall clock)
 // and idempotent (id-keyed INSERT OR IGNORE, natural-key updates).
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE projects (
@@ -103,6 +103,24 @@ CREATE VIRTUAL TABLE messages_fts USING fts5(
   kind UNINDEXED,
   native_ts UNINDEXED
 );
+-- Aggregate over messages, one row per distinct (source, native_session_id) =
+-- one ingested transcript session (a Claude Code jsonl / Codex rollout). Kept in
+-- lockstep with messages by the message.recorded fold so that listing sessions
+-- by recency is O(sessions), not a full messages scan. Derived like everything
+-- else here: a delete-and-rebuild replays the log and reconstructs it exactly.
+CREATE TABLE transcript_sessions (
+  id TEXT PRIMARY KEY,                       -- source || '/' || native_session_id
+  source TEXT NOT NULL,
+  native_session_id TEXT NOT NULL,
+  project_path TEXT,
+  first_ts TEXT,                             -- min native_ts seen (may be null)
+  last_ts TEXT,                              -- max native_ts seen (may be null)
+  first_recorded_at TEXT NOT NULL,
+  last_recorded_at TEXT NOT NULL,
+  message_count INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (source, native_session_id)
+);
+CREATE INDEX transcript_sessions_recency ON transcript_sessions(last_ts, last_recorded_at);
 CREATE TABLE artifacts (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -296,6 +314,35 @@ export class StateIndex {
             event.role,
             event.kind,
             event.native_ts ?? null,
+          );
+          // Keep the session aggregate in step. Guarded by res.changes so a
+          // re-swept (deduped) message never double-counts. MIN/MAX are wrapped
+          // in COALESCE because SQLite's scalar min()/max() return NULL if any
+          // argument is NULL, and native_ts is optional.
+          db.prepare(
+            `INSERT INTO transcript_sessions
+               (id, source, native_session_id, project_path, first_ts, last_ts,
+                first_recorded_at, last_recorded_at, message_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+             ON CONFLICT(id) DO UPDATE SET
+               message_count = message_count + 1,
+               project_path = COALESCE(excluded.project_path, transcript_sessions.project_path),
+               first_ts = MIN(
+                 COALESCE(transcript_sessions.first_ts, excluded.first_ts),
+                 COALESCE(excluded.first_ts, transcript_sessions.first_ts)),
+               last_ts = MAX(
+                 COALESCE(transcript_sessions.last_ts, excluded.last_ts),
+                 COALESCE(excluded.last_ts, transcript_sessions.last_ts)),
+               last_recorded_at = MAX(transcript_sessions.last_recorded_at, excluded.last_recorded_at)`,
+          ).run(
+            `${event.source}/${event.native_session_id}`,
+            event.source,
+            event.native_session_id,
+            event.project_path ?? null,
+            event.native_ts ?? null,
+            event.native_ts ?? null,
+            event.ts,
+            event.ts,
           );
         }
         break;
