@@ -77,7 +77,7 @@ function toLogEvent(body: EventBody): LogEvent {
 describe("lookup-task include transcript (Part A)", () => {
   it("renders the task's worker transcript in order, compacting a tool payload", () => {
     const { deps } = seededIndex();
-    const out = lookupTask(deps, { taskId: "t1", include: ["transcript"] });
+    const out = lookupTask(deps, { taskId: "t1", include: ["transcript"], view: "compact" });
 
     expect(out).toContain("transcript:");
     const userAt = out.indexOf("please build the widget");
@@ -99,6 +99,16 @@ describe("lookup-task include transcript (Part A)", () => {
     const { deps } = seededIndex();
     const out = lookupTask(deps, { taskId: "t1", include: ["transcript"] });
     expect(out).not.toContain("unrelated host chatter");
+  });
+
+  it("outlines the worker interior when no view is asked for", () => {
+    const { deps } = seededIndex();
+    const out = lookupTask(deps, { taskId: "t1", include: ["transcript"] });
+    expect(out).toContain("tool calls");
+    expect(out).toContain("[1]");
+    expect(out).toContain("Bash");
+    // An outline names the call but never loads its payload or its result.
+    expect(out).not.toContain("assistant/tool_use");
   });
 
   it("reports the empty state for a task with no transcript", () => {

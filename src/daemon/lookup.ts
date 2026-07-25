@@ -2,7 +2,9 @@ import { ToolError } from "../domain/errors.js";
 import {
   findProjectByPath,
   getSessionMessages,
+  getSessionOutline,
   getTaskMessages,
+  getTaskOutline,
   getTaskSnapshot,
   getTurnArtifacts,
   getTurnAudit,
@@ -12,7 +14,9 @@ import {
   searchMessages,
   type SearchFilters,
   type SessionInfo,
+  type SessionOutline,
   type TaskSnapshot,
+  type TranscriptHit,
   type TranscriptMessage,
   type TurnInfo,
 } from "../domain/tasks.js";
@@ -22,7 +26,9 @@ import {
   compactPayload,
   DEFAULT_TOOL_LINES,
   renderMessages,
+  renderOutline,
   truncate,
+  type MessageView,
   type TranscriptView,
 } from "./transcript-view.js";
 
@@ -39,10 +45,29 @@ interface LookupArgs {
   include?: IncludeField[];
   scope?: { turnId?: string; last?: number };
   limit?: number;
-  /** Rendering of the `transcript` include; defaults to compact. */
+  /** Rendering of the `transcript` include; see {@link resolveView}. */
   view?: TranscriptView;
   toolLines?: number;
   promptIdx?: number;
+}
+
+/**
+ * Which view an unset `view` means. The outline is the default because reading a
+ * whole session should be a decision, not an accident — but the two ways a
+ * caller can already narrow a read say plainly what they want, and outlining
+ * them instead would be a regression:
+ *
+ *   prompt N   drilling into one exchange means reading it → timeline
+ *   last N     a bounded read of the newest messages → compact, as before
+ */
+function resolveView(args: {
+  view?: TranscriptView;
+  promptIdx?: number;
+  last?: number;
+}): TranscriptView {
+  if (args.view !== undefined) return args.view;
+  if (args.promptIdx !== undefined) return "timeline";
+  return args.last !== undefined ? "compact" : "outline";
 }
 
 /**
@@ -51,7 +76,7 @@ interface LookupArgs {
  * An explicit `last` always wins.
  */
 function messageQuery(
-  view: TranscriptView,
+  view: MessageView,
   last: number | undefined,
   promptIdx: number | undefined,
 ): { limit?: number | null; promptIdx?: number } {
@@ -59,6 +84,19 @@ function messageQuery(
     limit: last ?? (view === "timeline" ? null : undefined),
     ...(promptIdx !== undefined ? { promptIdx } : {}),
   };
+}
+
+/** Shared tail of the two outline renderings: the index itself, or a plain
+ *  statement that there is nothing to index. */
+function outlineSection(outline: SessionOutline, promptIdx: number | undefined): string[] {
+  if (outline.message_count === 0) {
+    return [
+      promptIdx === undefined
+        ? "  (no transcript recorded)"
+        : `  (no messages at prompt ${promptIdx})`,
+    ];
+  }
+  return renderOutline(outline);
 }
 
 interface LookupDeps {
@@ -228,7 +266,19 @@ function renderDiffs(deps: LookupDeps, turns: TurnInfo[]): string {
  *  does not sub-select it; `scope.last` caps the number of messages shown, and
  *  `promptIdx` narrows to one exchange. */
 function renderTranscript(index: StateIndex, taskId: string, args: LookupArgs): string {
-  const view = args.view ?? "compact";
+  const view = resolveView({
+    ...(args.view !== undefined ? { view: args.view } : {}),
+    ...(args.promptIdx !== undefined ? { promptIdx: args.promptIdx } : {}),
+    ...(args.scope?.last !== undefined ? { last: args.scope.last } : {}),
+  });
+  if (view === "outline") {
+    const outline = getTaskOutline(
+      index,
+      taskId,
+      args.promptIdx === undefined ? {} : { promptIdx: args.promptIdx },
+    );
+    return ["transcript:", ...outlineSection(outline, args.promptIdx)].join("\n");
+  }
   const { messages, capped } = getTaskMessages(
     index,
     taskId,
@@ -248,13 +298,24 @@ function renderTranscript(index: StateIndex, taskId: string, args: LookupArgs): 
   return lines.join("\n");
 }
 
-/** Corpus-wide transcript search rendered for the search-transcripts tool. */
+/**
+ * Corpus-wide transcript search rendered for the search-transcripts tool. The
+ * query is optional — the structured filters stand on their own — but a search
+ * with neither is a session listing, which lookup-session already does better.
+ * Every hit prints its session and prompt index, so a result is an address to
+ * drill into and not just a sighting.
+ */
 export function searchTranscripts(
   index: StateIndex,
-  query: string,
+  query: string | null,
   limit: number,
   filters: SearchFilters = {},
 ): string {
+  const structured =
+    filters.tool !== undefined || filters.target !== undefined || filters.failed !== undefined;
+  if ((query === null || query === "") && !structured) {
+    throw new ToolError("invalid_request", "provide a query, or a tool / target / failed filter");
+  }
   let hits;
   try {
     hits = searchMessages(index, query, limit, filters);
@@ -264,16 +325,41 @@ export function searchTranscripts(
       `invalid search query: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (hits.length === 0) return `no transcript matches for: ${query}`;
-  const lines = [`transcript matches (${hits.length}):`];
+  const what = describeSearch(query, filters);
+  if (hits.length === 0) return `no transcript matches for: ${what}`;
+  const lines = [`transcript matches (${hits.length}) for ${what}:`];
   for (const h of hits) {
     const where = h.task_id ? `task ${h.task_id}` : `${h.source} session ${h.native_session_id}`;
     const proj = h.project_path ? ` · ${h.project_path}` : "";
     const ts = h.native_ts ? ` · ${h.native_ts}` : "";
-    lines.push(`  ${where}${proj} · ${h.role}/${h.kind}${ts}`);
-    lines.push(`    ${truncate(h.snippet, 200)}`);
+    lines.push(`  ${where}${proj} · ${h.role}/${h.kind} · prompt ${h.prompt_idx}${ts}`);
+    lines.push(`    ${hitBody(h)}`);
   }
   return lines.join("\n");
+}
+
+/** The snippet where a text search highlighted one; otherwise the call itself,
+ *  which is the whole content of a structured hit. */
+function hitBody(h: TranscriptHit): string {
+  if (h.snippet !== null) return truncate(h.snippet, 200);
+  // Truncated per part: collapsing the pair together would eat the gap that
+  // separates the tool from what it acted on.
+  const call = [h.tool_name, h.tool_target]
+    .filter((v): v is string => v !== null)
+    .map((v) => truncate(v, 200))
+    .join("  ");
+  return `${call === "" ? h.kind : call}${h.is_error === 1 ? "  ✗" : ""}`;
+}
+
+/** Echoes back what was actually searched for, so a filter-only search does not
+ *  report "no matches for: null". */
+function describeSearch(query: string | null, filters: SearchFilters): string {
+  const parts: string[] = [];
+  if (query !== null && query !== "") parts.push(query);
+  if (filters.tool !== undefined) parts.push(`tool ${filters.tool}`);
+  if (filters.target !== undefined) parts.push(`target ~ ${filters.target}`);
+  if (filters.failed !== undefined) parts.push(filters.failed ? "failed" : "succeeded");
+  return parts.join(", ");
 }
 
 interface SessionLookupArgs {
@@ -282,7 +368,7 @@ interface SessionLookupArgs {
   source?: string;
   limit?: number;
   scope?: { last?: number };
-  /** Rendering of a single session's history; defaults to compact. */
+  /** Rendering of a single session's history; see {@link resolveView}. */
   view?: TranscriptView;
   toolLines?: number;
   promptIdx?: number;
@@ -318,7 +404,22 @@ export function lookupSession(index: StateIndex, args: SessionLookupArgs): strin
     return lines.join("\n");
   }
   const info = candidates[0]!;
-  const view = args.view ?? "compact";
+  const view = resolveView({
+    ...(args.view !== undefined ? { view: args.view } : {}),
+    ...(args.promptIdx !== undefined ? { promptIdx: args.promptIdx } : {}),
+    ...(args.scope?.last !== undefined ? { last: args.scope.last } : {}),
+  });
+  if (view === "outline") {
+    const outline = getSessionOutline(
+      index,
+      info.source,
+      info.native_session_id,
+      args.promptIdx === undefined ? {} : { promptIdx: args.promptIdx },
+    );
+    return [sessionHeader(info, args.promptIdx), ...outlineSection(outline, args.promptIdx)].join(
+      "\n",
+    );
+  }
   const { messages, capped } = getSessionMessages(
     index,
     info.source,
@@ -343,16 +444,20 @@ function renderSessionList(sessions: SessionInfo[]): string {
   return lines.join("\n");
 }
 
+function sessionHeader(info: SessionInfo, promptIdx: number | undefined): string {
+  const proj = info.project_path ? `, ${info.project_path}` : "";
+  const at = promptIdx === undefined ? "" : ` · prompt ${promptIdx}`;
+  return `session ${info.native_session_id} (${info.source}${proj})${at}:`;
+}
+
 function renderSessionHistory(
   info: SessionInfo,
   messages: TranscriptMessage[],
   capped: boolean,
   args: SessionLookupArgs,
-  view: TranscriptView,
+  view: MessageView,
 ): string {
-  const proj = info.project_path ? `, ${info.project_path}` : "";
-  const at = args.promptIdx === undefined ? "" : ` · prompt ${args.promptIdx}`;
-  const lines = [`session ${info.native_session_id} (${info.source}${proj})${at}:`];
+  const lines = [sessionHeader(info, args.promptIdx)];
   if (messages.length === 0) {
     lines.push(
       args.promptIdx === undefined

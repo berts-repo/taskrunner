@@ -94,10 +94,12 @@ describe("timeline view", () => {
     expect(compact).toContain("…"); // truncation marker at 160 chars
   });
 
-  it("defaults to compact, so callers that never asked see today's output", () => {
+  it("still renders compact byte-for-byte when asked for it", () => {
     const index = seeded();
-    expect(lookupSession(index, { sessionId: "sess-T" })).toBe(
-      lookupSession(index, { sessionId: "sess-T", view: "compact" }),
+    // Phase 3 moved the default to the outline; scope.last still means compact,
+    // so a caller that narrows a read gets the same messages it always did.
+    expect(lookupSession(index, { sessionId: "sess-T", scope: { last: 99 } })).toBe(
+      lookupSession(index, { sessionId: "sess-T", view: "compact", scope: { last: 99 } }),
     );
   });
 

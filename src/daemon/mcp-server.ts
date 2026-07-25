@@ -71,13 +71,16 @@ function buildInstructions(config: Config): string {
       "fetches status, output, and audit records; continue-task sends a follow-up prompt to " +
       "an existing task; cancel-task stops a running turn.",
     "",
-    "Transcripts: worker turns and host agent sessions are archived. lookup-session " +
-      "lists recent sessions (or one session's full history by id), including host " +
-      'sessions no task links; lookup-task with include ["transcript"] returns one ' +
-      "task's worker interior; search-transcripts full-text searches the whole ingested " +
-      "corpus, optionally scoped to a project, sessions, the last N sessions, or a time window. " +
-      'Both lookups return one compacted line per message; pass view "timeline" for the ' +
-      "full audit rendering, and prompt N to read a single exchange.",
+    "Transcripts: worker turns and host agent sessions are archived, and searchable. " +
+      "Work them in two steps — find, then drill — instead of reading a session whole:\n" +
+      "  1. find. search-transcripts searches the corpus by text, and/or by structured " +
+      "filters: tool (which tool was called), target (the path or command it acted on), " +
+      "failed (whether it errored). Scope with project, sessions, lastSessions, since/until. " +
+      "Or list sessions with lookup-session, then read one as an outline — one line per " +
+      "prompt, reply and tool call, each exchange addressed [N].\n" +
+      "  2. drill. Every hit and outline entry carries that address; pass prompt N to " +
+      "lookup-session (or lookup-task) to read that one exchange in full. Reach for " +
+      'view "timeline" on a whole session only when you truly need all of it.',
     "",
     "Worker credentials live in Docker volumes on this host. If a turn fails with a " +
       "login or auth error, the user must re-run the worker login procedure on the host " +
@@ -87,17 +90,20 @@ function buildInstructions(config: Config): string {
 
 /**
  * How an archived transcript is rendered, shared by lookup-task and
- * lookup-session. The default stays compact: an agent scanning history should
- * pay for the timeline only when it asks for it.
+ * lookup-session. The default is the outline: reading a session in full costs
+ * tens of thousands of tokens, so it should be something a caller asks for.
  */
 const VIEW_ARGS = {
   view: z
-    .enum(["compact", "timeline"])
+    .enum(["outline", "compact", "timeline"])
     .optional()
     .describe(
-      "compact (default): one truncated line per message, for scanning. " +
-        "timeline: the audit view — prompts, replies and reasoning in full, " +
-        "tool bodies clipped to toolLines.",
+      "outline (default): the scannable index — one line per prompt, reply and " +
+        "tool call, each exchange addressed [N]; no message bodies. " +
+        "compact: one truncated line per message, including tool results. " +
+        "timeline: the audit view — prompts, replies and reasoning in full, tool " +
+        "bodies clipped to toolLines. Passing prompt N implies timeline; passing " +
+        "scope.last implies compact.",
     ),
   toolLines: z
     .number()
@@ -113,16 +119,19 @@ const VIEW_ARGS = {
     .optional()
     .describe(
       "Return only the exchange at this prompt index — one real user prompt and " +
-        "everything that followed it. The timeline marks these as [N].",
+        "everything that followed it. This is the drill-down step: outlines mark " +
+        "exchanges as [N] and every search hit reports the prompt it came from.",
     ),
 };
 
+type ViewName = "outline" | "compact" | "timeline";
+
 /** Maps the wire name `prompt` onto the renderer's `promptIdx`. */
 function viewArgs(args: {
-  view?: "compact" | "timeline";
+  view?: ViewName;
   toolLines?: number;
   prompt?: number;
-}): { view?: "compact" | "timeline"; toolLines?: number; promptIdx?: number } {
+}): { view?: ViewName; toolLines?: number; promptIdx?: number } {
   return {
     ...(args.view !== undefined ? { view: args.view } : {}),
     ...(args.toolLines !== undefined ? { toolLines: args.toolLines } : {}),
@@ -268,11 +277,12 @@ export function createMcpServer(ctx: ToolContext): McpServer {
     "lookup-session",
     "Browse ingested transcript sessions (one conversation = one Claude Code / " +
       "Codex session). With no sessionId: lists sessions most-recent first, " +
-      "optionally filtered to a project. With a sessionId: returns that session's " +
-      "full history in order — including host sessions no task links (unlike " +
-      "lookup-task's transcript). scope.last caps the messages shown. Freshly " +
-      "sweeps host transcripts first, so the newest session reflects the live " +
-      "conversation up to its last flushed line.",
+      "optionally filtered to a project. With a sessionId: returns that session as " +
+      "an outline — every exchange addressed [N], nothing loaded in full — then " +
+      "pass prompt N to read one, or view timeline for the whole thing. Works for " +
+      "host sessions no task links (unlike lookup-task's transcript). scope.last " +
+      "caps the messages shown. Freshly sweeps host transcripts first, so the " +
+      "newest session reflects the live conversation up to its last flushed line.",
     {
       sessionId: z
         .string()
@@ -300,15 +310,34 @@ export function createMcpServer(ctx: ToolContext): McpServer {
 
   tool(
     "search-transcripts",
-    "Full-text search across ingested transcripts — the archived interior of " +
-      "delegated worker turns and host agent sessions. Returns matching messages " +
-      "with a snippet, project, and session, attributed to a task where the message " +
-      "came from a linked worker session. Query uses SQLite FTS5 syntax: bare words " +
-      'are ANDed, "quoted text" matches a phrase. Optional filters scope the search ' +
-      "to a project, specific sessions, the last N sessions, a time window, or a " +
-      "role/kind; sort by relevance (default) or recency.",
+    "Search the ingested transcripts — the archived interior of delegated worker " +
+      "turns and host agent sessions. Two ways to search, combinable: by text " +
+      "(query, SQLite FTS5 syntax — bare words are ANDed, \"quoted text\" matches a " +
+      "phrase), and by what a tool call did (tool, target, failed), which answers " +
+      "questions text search answers badly: which sessions touched a file, where a " +
+      "command failed, every Edit under a path. One of the two is required. Each hit " +
+      "reports its session and prompt index — pass that prompt to lookup-session to " +
+      "read the exchange. Further filters scope to a project, sessions, the last N " +
+      "sessions, a time window, or a role/kind.",
     {
-      query: z.string().describe("FTS5 search expression"),
+      query: z
+        .string()
+        .optional()
+        .describe("FTS5 search expression; omit to search by tool/target/failed alone"),
+      tool: z.string().optional().describe("Only calls of this tool, e.g. 'Edit' or 'Bash'"),
+      target: z
+        .string()
+        .optional()
+        .describe(
+          "Substring of the path or command a call acted on, e.g. 'src/shim/proxy.ts'",
+        ),
+      failed: z
+        .boolean()
+        .optional()
+        .describe(
+          "true: only calls that failed. false: only calls that succeeded. Calls whose " +
+            "record states no outcome (rejected, aborted) are excluded either way.",
+        ),
       project: z.string().optional().describe("Restrict to this absolute project path"),
       sessions: z
         .array(z.string())
@@ -330,7 +359,10 @@ export function createMcpServer(ctx: ToolContext): McpServer {
       sort: z
         .enum(["rank", "recent"])
         .optional()
-        .describe("'rank' relevance (default) or 'recent' newest-first"),
+        .describe(
+          "'rank' relevance (default) or 'recent' newest-first; without a query, " +
+            "hits are always newest-first",
+        ),
       limit: z
         .number()
         .int()
@@ -348,11 +380,14 @@ export function createMcpServer(ctx: ToolContext): McpServer {
         ...(args.until !== undefined ? { until: args.until } : {}),
         ...(args.role !== undefined ? { role: args.role } : {}),
         ...(args.kind !== undefined ? { kind: args.kind } : {}),
+        ...(args.tool !== undefined ? { tool: args.tool } : {}),
+        ...(args.target !== undefined ? { target: args.target } : {}),
+        ...(args.failed !== undefined ? { failed: args.failed } : {}),
         ...(args.sort !== undefined ? { sort: args.sort } : {}),
       };
       // lastSessions ranks by recency, so refresh host sessions first.
       if (args.lastSessions !== undefined) await ctx.sweepHostTranscripts();
-      return searchTranscripts(ctx.index, args.query, args.limit ?? 20, filters);
+      return searchTranscripts(ctx.index, args.query ?? null, args.limit ?? 20, filters);
     },
   );
 

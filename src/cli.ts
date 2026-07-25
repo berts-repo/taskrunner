@@ -21,18 +21,24 @@ Query (read the ingested corpus without an MCP session):
   sessions [--project P] [--limit N]
               List ingested transcript sessions, most recent first.
   session <id> [--source S] [--last N] [--prompt N]
-               [--compact] [--tool-lines N]
-              Print one session's timeline (host or worker session): prompts,
-              replies and reasoning in full, tool output capped at 20 lines
-              (--tool-lines 0 for all). --prompt N prints one exchange;
-              --compact restores one truncated line per message. Pipe to less.
-  search "<fts>" [--project P] [--sessions a,b] [--last-sessions N]
-                 [--role R] [--kind K] [--since T] [--until T]
-                 [--sort rank|recent] [--limit N]
-              Full-text search across transcripts.
+               [--view timeline|outline|compact] [--tool-lines N]
+              Print one session (host or worker). Defaults to the timeline:
+              prompts, replies and reasoning in full, tool output capped at 20
+              lines (--tool-lines 0 for all). --prompt N prints one exchange.
+              --view outline is the scannable index, one line per prompt and
+              tool call; --view compact is one truncated line per message.
+              Pipe to less.
+  search ["<fts>"] [--tool T] [--target S] [--failed true|false]
+                   [--project P] [--sessions a,b] [--last-sessions N]
+                   [--role R] [--kind K] [--since T] [--until T]
+                   [--sort rank|recent] [--limit N]
+              Search transcripts by text, by what a tool call did, or both.
+              --target matches the path or command a call acted on, e.g.
+              --tool Edit --target src/shim/proxy.ts. Every hit prints the
+              prompt index to drill into with session <id> --prompt N.
   task <id> [--include turns,trace,audit,artifacts,diff,transcript]
             [--turn <turnId>] [--last N] [--prompt N]
-            [--compact] [--tool-lines N]
+            [--view timeline|outline|compact] [--tool-lines N]
               Look up one task; tasks --project P lists a project's tasks.
               --include transcript prints the worker's interior as a timeline,
               with the same rendering flags as session.
@@ -47,9 +53,6 @@ interface Args {
   paths: StatePaths;
 }
 
-/** Flags that stand alone; every other `--x` takes the next argv entry. */
-const BOOLEAN_FLAGS = new Set(["compact"]);
-
 function parseArgs(argv: string[]): Args {
   let command: string | undefined;
   const rest: string[] = [];
@@ -60,8 +63,6 @@ function parseArgs(argv: string[]): Args {
     if (arg === "--state-root") {
       root = argv[++i];
       if (!root) throw new Error("--state-root requires a directory argument");
-    } else if (arg.startsWith("--") && BOOLEAN_FLAGS.has(arg.slice(2))) {
-      flags[arg.slice(2)] = "true";
     } else if (arg.startsWith("--")) {
       const value = argv[++i];
       if (value === undefined) throw new Error(`${arg} requires a value`);
@@ -103,12 +104,14 @@ async function readQuery(paths: StatePaths, path: string, params: Record<string,
 
 /**
  * Transcript rendering params for the query routes. The terminal defaults to
- * the timeline — an audit view is what a person at a shell wants — while the
- * routes themselves keep defaulting to compact for the MCP tools.
+ * the timeline — an audit view is what a person at a shell wants, and a person
+ * can page and grep — while the routes themselves default to the outline, which
+ * is what an agent paying per token needs. Always sent explicitly, so the two
+ * defaults never have to agree.
  */
 function renderFlags(flags: Record<string, string>): Record<string, string | undefined> {
   return {
-    view: flags["compact"] ? "compact" : "timeline",
+    view: flags["view"] ?? "timeline",
     toolLines: flags["tool-lines"],
     prompt: flags["prompt"],
   };
@@ -238,12 +241,18 @@ async function main(argv: string[]): Promise<number> {
     }
     case "search": {
       const query = args.rest[0];
-      if (!query) {
-        process.stderr.write('taskrunner: search "<fts>" requires a query\n');
+      const structured = ["tool", "target", "failed"].some((f) => args.flags[f] !== undefined);
+      if (!query && !structured) {
+        process.stderr.write(
+          'taskrunner: search needs a query, or --tool / --target / --failed\n',
+        );
         return 1;
       }
       return readQuery(args.paths, "/search-transcripts", {
         query,
+        tool: args.flags["tool"],
+        target: args.flags["target"],
+        failed: args.flags["failed"],
         project: args.flags["project"],
         sessions: args.flags["sessions"],
         lastSessions: args.flags["last-sessions"],

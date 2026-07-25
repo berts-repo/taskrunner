@@ -406,6 +406,14 @@ export class Daemon {
       if (!Number.isFinite(n)) throw new ToolError("invalid_request", `${name} must be a number`);
       return n;
     };
+    const bool = (name: string): boolean | undefined => {
+      const v = q.get(name);
+      if (v === null) return undefined;
+      if (v !== "true" && v !== "false") {
+        throw new ToolError("invalid_request", `${name} must be true or false`);
+      }
+      return v === "true";
+    };
     const deps = { index: this.index, artifacts: this.artifacts };
     switch (url.pathname) {
       case "/lookup-session": {
@@ -422,13 +430,13 @@ export class Daemon {
       }
       case "/search-transcripts": {
         const query = q.get("query");
-        if (!query) throw new ToolError("invalid_request", "query is required");
         const sort = q.get("sort");
         if (sort !== null && sort !== "rank" && sort !== "recent") {
           throw new ToolError("invalid_request", "sort must be 'rank' or 'recent'");
         }
         const sessions = q.get("sessions");
         const lastSessions = num("lastSessions");
+        const failed = bool("failed");
         const filters: SearchFilters = {
           ...(q.get("project") ? { project: q.get("project")! } : {}),
           ...(sessions ? { sessions: sessions.split(",").filter(Boolean) } : {}),
@@ -437,6 +445,9 @@ export class Daemon {
           ...(q.get("until") ? { until: q.get("until")! } : {}),
           ...(q.get("role") ? { role: q.get("role")! } : {}),
           ...(q.get("kind") ? { kind: q.get("kind")! } : {}),
+          ...(q.get("tool") ? { tool: q.get("tool")! } : {}),
+          ...(q.get("target") ? { target: q.get("target")! } : {}),
+          ...(failed !== undefined ? { failed } : {}),
           ...(sort ? { sort: sort as "rank" | "recent" } : {}),
         };
         if (lastSessions !== undefined) await this.sweeper.sweep({ hostOnly: true });

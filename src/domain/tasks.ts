@@ -370,9 +370,10 @@ export function getSessionMessages(
   return { messages, capped };
 }
 
-// One full-text hit from corpus-wide transcript search. `task_id` is present
-// only when the matched message came from a worker session linked to a task;
-// host-session messages match too and carry none.
+// One hit from corpus-wide transcript search. `task_id` is present only when the
+// matched message came from a worker session linked to a task; host-session
+// messages match too and carry none. `prompt_idx` makes a hit drillable: it is
+// the address to re-read the exchange it came from.
 export interface TranscriptHit {
   task_id: string | null;
   source: string;
@@ -381,7 +382,13 @@ export interface TranscriptHit {
   native_ts: string | null;
   native_session_id: string;
   project_path: string | null;
-  snippet: string;
+  prompt_idx: number;
+  tool_name: string | null;
+  tool_target: string | null;
+  is_error: number | null;
+  /** The matched text with the hit bracketed; null for a filter-only search,
+   * which never touches the full-text index and so has nothing to highlight. */
+  snippet: string | null;
 }
 
 /** Optional scoping for {@link searchMessages}. */
@@ -395,27 +402,59 @@ export interface SearchFilters {
   until?: string;
   role?: string;
   kind?: string;
-  /** "rank" (relevance, default) or "recent" (newest native_ts first). */
+  /** Restrict to calls of one tool, e.g. "Edit". Matches tool_use records only. */
+  tool?: string;
+  /** Substring of the path or command a call acted on; SQL LIKE wildcards apply. */
+  target?: string;
+  /** true: the call failed. false: it succeeded. Records that state no outcome
+   * (rejections, aborts) are excluded either way — see message-facts.ts. */
+  failed?: boolean;
+  /** "rank" (relevance, default) or "recent" (newest native_ts first). Ignored
+   * without a query: a filter-only search has no relevance to rank by. */
   sort?: "rank" | "recent";
 }
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 
 /**
- * Full-text search across ingested transcript messages, optionally scoped by
- * session/project/time/role/kind (see {@link SearchFilters}). Task attribution
- * and every non-content field come from a 1:1 join to `messages` (keyed on the
- * unique message_id), so an fts hit is never multiplied. May throw on malformed
- * FTS5 query syntax — callers map that to a client error.
+ * A call and its result are one thing, so a tool_use record inherits the failure
+ * state of the result it is paired with, while a result states its own. Lets
+ * `failed` combine with `tool`/`target`, which live on the *call* record.
+ */
+const ERROR_STATE = `COALESCE(m.is_error,
+      (SELECT r.is_error FROM messages r
+        WHERE r.tool_use_id = m.tool_use_id AND r.kind = 'tool_result'))`;
+
+/** Columns the fts table carries unindexed, so a text search can filter without
+ *  reaching through the join. */
+const FTS_COLUMNS = new Set(["source", "role", "kind", "native_ts", "native_session_id"]);
+
+/**
+ * Search across ingested transcript messages. With a `query` this is FTS5 over
+ * message text; with none it is a structured scan over the facts Phase 1
+ * promoted to columns — which is what makes "every Edit under src/shim" a query
+ * rather than a grep over JSON blobs. Either way the same filters apply and the
+ * same hit shape comes back.
+ *
+ * Task attribution and every non-content field come from a 1:1 join to
+ * `messages` (keyed on the unique message_id), so an fts hit is never
+ * multiplied. May throw on malformed FTS5 query syntax — callers map that to a
+ * client error.
  */
 export function searchMessages(
   index: StateIndex,
-  query: string,
+  query: string | null,
   limit: number = DEFAULT_SEARCH_LIMIT,
   filters: SearchFilters = {},
 ): TranscriptHit[] {
-  const clauses: string[] = ["messages_fts MATCH ?"];
-  const params: unknown[] = [query];
+  const fts = query !== null && query !== "";
+  const col = (name: string): string => (fts && FTS_COLUMNS.has(name) ? `f.${name}` : `m.${name}`);
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (fts) {
+    clauses.push("messages_fts MATCH ?");
+    params.push(query);
+  }
 
   const sessions =
     filters.sessions ??
@@ -427,7 +466,7 @@ export function searchMessages(
       : undefined);
   if (sessions !== undefined) {
     if (sessions.length === 0) return []; // scoped to no session ⇒ no hits
-    clauses.push(`f.native_session_id IN (${sessions.map(() => "?").join(", ")})`);
+    clauses.push(`${col("native_session_id")} IN (${sessions.map(() => "?").join(", ")})`);
     params.push(...sessions);
   }
   if (filters.project !== undefined) {
@@ -435,42 +474,166 @@ export function searchMessages(
     params.push(filters.project);
   }
   if (filters.role !== undefined) {
-    clauses.push("f.role = ?");
+    clauses.push(`${col("role")} = ?`);
     params.push(filters.role);
   }
   if (filters.kind !== undefined) {
-    clauses.push("f.kind = ?");
+    clauses.push(`${col("kind")} = ?`);
     params.push(filters.kind);
   }
   if (filters.since !== undefined) {
-    clauses.push("f.native_ts >= ?");
+    clauses.push(`${col("native_ts")} >= ?`);
     params.push(filters.since);
   }
   if (filters.until !== undefined) {
-    clauses.push("f.native_ts <= ?");
+    clauses.push(`${col("native_ts")} <= ?`);
     params.push(filters.until);
   }
-  const order = filters.sort === "recent" ? "f.native_ts DESC, rank" : "rank";
+  if (filters.tool !== undefined) {
+    clauses.push("m.tool_name = ?");
+    params.push(filters.tool);
+  }
+  if (filters.target !== undefined) {
+    clauses.push("m.tool_target LIKE ?");
+    params.push(`%${filters.target}%`);
+  }
+  if (filters.failed !== undefined) {
+    clauses.push(`${ERROR_STATE} = ?`);
+    params.push(filters.failed ? 1 : 0);
+    // Both halves of a pair carry the state, so a filter-only search would
+    // report one failure twice. The call is the useful half — it names the tool
+    // and the target. A text search is left alone: there the caller asked for
+    // whichever record their words appear in.
+    if (!fts && filters.kind === undefined) clauses.push("m.kind = 'tool_use'");
+  }
+
+  const from = fts
+    ? "messages_fts f JOIN messages m ON m.id = f.message_id"
+    : "messages m";
+  const snippet = fts ? "snippet(messages_fts, 0, '[', ']', '…', 12)" : "NULL";
+  const order = fts
+    ? filters.sort === "recent"
+      ? "f.native_ts DESC, rank"
+      : "rank"
+    : "m.native_ts DESC, m.id DESC";
   params.push(limit);
 
   return index.db
     .prepare(
       `SELECT
          (SELECT ws.task_id FROM worker_sessions ws
-           WHERE ws.native_session_id = f.native_session_id
+           WHERE ws.native_session_id = ${col("native_session_id")}
            ORDER BY ws.recorded_at, ws.id LIMIT 1) AS task_id,
-         f.source            AS source,
-         f.role              AS role,
-         f.kind              AS kind,
-         f.native_ts         AS native_ts,
-         f.native_session_id AS native_session_id,
-         m.project_path      AS project_path,
-         snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet
-       FROM messages_fts f
-       JOIN messages m ON m.id = f.message_id
+         ${col("source")}            AS source,
+         ${col("role")}              AS role,
+         ${col("kind")}              AS kind,
+         ${col("native_ts")}         AS native_ts,
+         ${col("native_session_id")} AS native_session_id,
+         m.project_path              AS project_path,
+         m.prompt_idx                AS prompt_idx,
+         m.tool_name                 AS tool_name,
+         m.tool_target               AS tool_target,
+         ${ERROR_STATE}              AS is_error,
+         ${snippet}                  AS snippet
+       FROM ${from}
        WHERE ${clauses.join(" AND ")}
        ORDER BY ${order}
        LIMIT ?`,
     )
     .all(...(params as never[])) as unknown as TranscriptHit[];
+}
+
+// The scannable index of a session: one entry per prompt, reply and tool call,
+// with no message bodies read beyond a leading slice of prose. That is what
+// keeps an outline cheap enough to be the default view — a session that costs
+// ~28k tokens to read in full outlines in well under a tenth of that.
+export interface OutlineEntry {
+  prompt_idx: number;
+  role: string;
+  kind: string;
+  native_ts: string | null;
+  /** Leading slice of a prose message; null on a tool call, whose body is
+   * deliberately never loaded. */
+  head: string | null;
+  tool_name: string | null;
+  tool_target: string | null;
+  /** Failure state of the call, resolved from the result it is paired with. */
+  is_error: number | null;
+}
+
+export interface SessionOutline {
+  /** Every archived message, including the tool results the outline omits. */
+  message_count: number;
+  prompt_count: number;
+  tool_count: number;
+  entries: OutlineEntry[];
+}
+
+/** Prose kept per outline entry. Rendering truncates well below this; the slice
+ *  exists so a 40k-character preamble is never pulled out of the database. */
+const OUTLINE_HEAD = 400;
+
+/**
+ * Tool results are excluded: their failure state is already folded onto the call
+ * that produced them, and a result carries nothing else an index needs.
+ */
+function outlineFor(
+  index: StateIndex,
+  scope: { sql: string; params: unknown[] },
+  opts: { promptIdx?: number } = {},
+): SessionOutline {
+  const filter = opts.promptIdx === undefined ? "" : "AND m.prompt_idx = ?";
+  const params = [...scope.params, ...(opts.promptIdx === undefined ? [] : [opts.promptIdx])];
+  const totals = index.db
+    .prepare(
+      `SELECT COUNT(*) AS message_count,
+              COALESCE(MAX(m.prompt_idx), 0) AS prompt_count,
+              COALESCE(SUM(m.kind = 'tool_use'), 0) AS tool_count
+         FROM messages m
+        WHERE ${scope.sql} ${filter}`,
+    )
+    .get(...(params as never[])) as unknown as Omit<SessionOutline, "entries">;
+  const entries = index.db
+    .prepare(
+      `SELECT m.prompt_idx, m.role, m.kind, m.native_ts, m.tool_name, m.tool_target,
+              CASE WHEN m.kind = 'tool_use' THEN NULL
+                   ELSE substr(m.content, 1, ${OUTLINE_HEAD}) END AS head,
+              ${ERROR_STATE} AS is_error
+         FROM messages m
+        WHERE ${scope.sql} ${filter}
+          AND m.kind != 'tool_result'
+        ORDER BY m.native_ts, m.recorded_at, m.id`,
+    )
+    .all(...(params as never[])) as unknown as OutlineEntry[];
+  return { ...totals, entries };
+}
+
+export function getSessionOutline(
+  index: StateIndex,
+  source: string,
+  nativeSessionId: string,
+  opts: { promptIdx?: number } = {},
+): SessionOutline {
+  return outlineFor(
+    index,
+    { sql: "m.source = ? AND m.native_session_id = ?", params: [source, nativeSessionId] },
+    opts,
+  );
+}
+
+export function getTaskOutline(
+  index: StateIndex,
+  taskId: string,
+  opts: { promptIdx?: number } = {},
+): SessionOutline {
+  return outlineFor(
+    index,
+    {
+      sql: `m.native_session_id IN (
+              SELECT DISTINCT native_session_id FROM worker_sessions WHERE task_id = ?
+            )`,
+      params: [taskId],
+    },
+    opts,
+  );
 }

@@ -1,17 +1,19 @@
-import type { TranscriptMessage } from "../domain/tasks.js";
+import type { OutlineEntry, SessionOutline, TranscriptMessage } from "../domain/tasks.js";
 
-// How an archived transcript is rendered. Two views over the same messages,
+// How an archived transcript is rendered. Three views over the same session,
 // chosen by the caller rather than by which surface they arrived through:
 //
-//   compact   one truncated line per message — a scan, and what the MCP tools
-//             have always returned.
+//   outline   the scannable index: one line per prompt, reply and tool call,
+//             each exchange addressed by [N] so it can be drilled into. No
+//             message bodies — the whole point is that it is cheap to read.
+//   compact   one truncated line per message — every message, one scan.
 //   timeline  the audit view: prompts, replies and reasoning in full, tool
 //             bodies clipped by line count. Bodies are printed unindented and
 //             unmodified so code and diffs stay copy-pasteable.
 
-export type TranscriptView = "compact" | "timeline";
+export type TranscriptView = "outline" | "compact" | "timeline";
 
-export const TRANSCRIPT_VIEWS: TranscriptView[] = ["compact", "timeline"];
+export const TRANSCRIPT_VIEWS: TranscriptView[] = ["outline", "compact", "timeline"];
 
 /** Lines of a tool body kept in the timeline; 0 keeps all of them. */
 export const DEFAULT_TOOL_LINES = 20;
@@ -20,13 +22,89 @@ export function isTranscriptView(value: string): value is TranscriptView {
   return (TRANSCRIPT_VIEWS as string[]).includes(value);
 }
 
+/** The views that render messages. The outline never loads a message body, so
+ *  it is fed by its own query and cannot share this path. */
+export type MessageView = Exclude<TranscriptView, "outline">;
+
 /** Renders a session's messages as body lines, without any header. */
 export function renderMessages(
   messages: TranscriptMessage[],
-  view: TranscriptView,
+  view: MessageView,
   toolLines: number = DEFAULT_TOOL_LINES,
 ): string[] {
   return view === "timeline" ? timelineLines(messages, toolLines) : compactLines(messages);
+}
+
+/** Width the tool column is padded to; past it the target simply follows. */
+const TOOL_COLUMN = 14;
+/** One outline line is one line: prose and targets are collapsed to this. */
+const OUTLINE_WIDTH = 140;
+
+/**
+ * The session as an index rather than a transcript: a counts line, then one
+ * block per exchange headed by its `[N]` address. Every tool call gets its own
+ * line, in the order it was made — a collapsed or capped list would stop the
+ * outline being a complete index of what happened.
+ */
+export function renderOutline(outline: SessionOutline): string[] {
+  const lines = [
+    `${outline.message_count} messages · ${outline.prompt_count} prompts · ` +
+      `${outline.tool_count} tool calls`,
+  ];
+  let group: number | undefined;
+  // The records before a session's first real prompt are usually all harness
+  // furniture, so that heading waits until something is actually filed under it.
+  let pending: string | null = null;
+  for (const e of outline.entries) {
+    if (e.prompt_idx !== group) {
+      group = e.prompt_idx;
+      pending = null; // the previous group ended without filing anything
+      const header = groupHeader(e);
+      if (e.prompt_idx === 0) pending = header;
+      else lines.push("", header);
+    }
+    // A user record that does not open a group is one the harness wrote on the
+    // user's behalf (see message-facts.ts) — noise in an index.
+    if (e.role === "user") continue;
+    const line = entryLine(e);
+    if (line === null) continue;
+    if (pending !== null) {
+      lines.push("", pending);
+      pending = null;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+/** `[N] HH:MM  the prompt`, or a standing heading for the records that precede a
+ *  session's first real prompt (a worker session may have none at all). */
+function groupHeader(e: OutlineEntry): string {
+  const at = clock(e.native_ts);
+  if (e.prompt_idx === 0) return `[0]${at}  (before the first prompt)`;
+  const prompt = e.role === "user" && e.head !== null ? truncate(e.head, OUTLINE_WIDTH) : "";
+  return `[${e.prompt_idx}]${at}  ${prompt}`;
+}
+
+/** A reply as `→ text`, a call as `name  target`; anything else is left out. */
+function entryLine(e: OutlineEntry): string | null {
+  if (e.kind === "tool_use") {
+    const target = e.tool_target === null ? "" : truncate(e.tool_target, OUTLINE_WIDTH);
+    const name = (e.tool_name ?? "tool").padEnd(TOOL_COLUMN);
+    return `    ${`${name}${target}`.trimEnd()}${e.is_error === 1 ? "  ✗" : ""}`;
+  }
+  if (e.role === "assistant" && e.kind === "message" && e.head !== null) {
+    const text = truncate(e.head, OUTLINE_WIDTH);
+    return text === "" ? null : `    → ${text}`;
+  }
+  return null; // reasoning, developer preambles, system records
+}
+
+/** Time of day from an ISO timestamp; sessions rarely span days and the header
+ *  already carries the date. */
+function clock(nativeTs: string | null): string {
+  const at = nativeTs?.slice(11, 16);
+  return at !== undefined && /^\d\d:\d\d$/.test(at) ? ` ${at}` : "";
 }
 
 function compactLines(messages: TranscriptMessage[]): string[] {
