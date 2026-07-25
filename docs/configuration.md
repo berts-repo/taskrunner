@@ -1,0 +1,51 @@
+# Configuration
+
+Taskrunner works out of the box — **every setting has a default**. Configuration is
+optional and only exists to override those defaults.
+
+Config lives at `<state root>/config.toml`, which by default is
+`~/.taskrunner/config.toml`. Create the file only if you want to change something.
+
+Here are the settings, shown with their defaults:
+
+```toml
+[task]
+turn_timeout_seconds = 1800   # how long a single turn may run before it's stopped
+
+[worker.codex]                # built-in; [worker.claude] is the same shape
+image = "taskrunner/codex-worker"
+auth_volume = "taskrunner-codex-home"
+allowed_domains = ["api.openai.com", "auth.openai.com", "chatgpt.com", "*.chatgpt.com"]
+
+[egress]
+proxy_image = "taskrunner/egress-proxy"
+
+[ingest]                      # the conversation archive — see docs/transcripts.md
+interval_seconds = 300        # how often Taskrunner sweeps in new transcripts
+
+[ingest.sources.claude-code]  # built-in; [ingest.sources.codex] is the same shape
+format = "claude-code"        # which parser reads this source
+dirs = ["~/.claude/projects"] # folders scanned for transcript files
+```
+
+The built-in claude worker defaults to
+`["api.anthropic.com", "*.anthropic.com", "claude.ai", "platform.claude.com"]`, and
+the built-in codex ingest source scans `["~/.codex/sessions"]`.
+
+## Adding your own
+
+- **A new worker** is any other `[worker.<name>]` section — see
+  [Custom & local-model workers](workers.md).
+- **A new transcript source** is any other `[ingest.sources.<name>]` section; it needs
+  a `format` naming a built-in parser (`claude-code` or `codex`) and the host `dirs`
+  to scan.
+
+## Good to know
+
+- **Typos fail loudly.** Unknown keys are rejected, not ignored — so a misspelled
+  setting stops the config from loading instead of silently doing nothing.
+- **Worker transcripts aren't configured here.** A source is always a set of *host*
+  folders. The transcripts a worker writes inside its own storage are picked up
+  automatically from that worker's settings, so there's nothing to wire up (and
+  nothing that can fall out of sync). Details in the
+  [conversation archive](transcripts.md).
