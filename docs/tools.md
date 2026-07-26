@@ -31,9 +31,9 @@ Fetches a task. By default you get a compact summary (status, worker, how many
 turns). Ask for more detail with **include**:
 
 - **turns** — the paired prompt/response exchanges.
-- **transcript** — the worker's full interior: the tool calls, reasoning, and
-  messages that ran *inside* the container. See
-  [Conversation archive](transcripts.md).
+- **transcript** — the worker's interior: the tool calls, reasoning, and messages
+  that ran *inside* the container. Like `lookup-session`, this starts as an outline
+  you can drill into by exchange number. See [Conversation archive](transcripts.md).
 - **trace** — an end-to-end replay of a turn: its input, everything the worker did,
   and its output.
 - **audit** — the recorded events for a turn.
@@ -53,23 +53,37 @@ so it remembers the earlier turns.
 Stops the turn that's currently running. The task, its history, and its workspace are
 kept — nothing is thrown away.
 
-### `lookup-session` — browse whole conversations
+### `lookup-session` — scan a conversation, then read one exchange
 
 Works over **sessions** — a session being one conversation, whether a worker's or one
 of your own host agents. With no id it **lists your recent sessions**, newest first,
-so you can ask for "the last session" or "my last five". Give it a session id and it
-returns that **whole conversation in order** — including your own host sessions, which
-`lookup-task` can't reach because they aren't tied to a task. You can filter the list
-to one project and cap how much of a long session it prints. See
-[Conversation archive](transcripts.md).
+so you can ask for "the last session" or "my last five". This is also the only way to
+read back your own host sessions, which `lookup-task` can't reach because they aren't
+tied to a task.
 
-### `search-transcripts` — search everything the workers said
+Given a session id it returns an **outline**: one line per exchange, showing what was
+asked, how the reply opened, and every tool call with the file or command it acted on.
+Each exchange is numbered, so the natural follow-up — "now show me exchange 4" — gets
+that one exchange in full. The whole conversation end to end is available too, but
+it's rarely what you want first, because a long session costs a lot to read. You can
+also filter the list to one project. See [Conversation archive](transcripts.md).
 
-Full-text search across every recorded conversation — both worker turns and your own
-host agent sessions. Returns the matching messages with a snippet, the project they're
-from, and which task a match belongs to when it came from a delegated turn. You can
-narrow the search to a project, to specific sessions or your last few sessions, to a
-time window, or to a kind of message — and sort by relevance or most-recent. See
+### `search-transcripts` — find it, then read it
+
+Searches every recorded conversation — both worker turns and your own host agent
+sessions — three ways, alone or in combination:
+
+- **by text** — the words in a message;
+- **by what a tool did** — which **tool** ran and the **target** it acted on, a file
+  path or a command. This is how you answer "which sessions touched this file", which
+  searching the text answers badly;
+- **by what failed** — only calls that errored, or only ones that worked.
+
+Results come back with a snippet, the project they're from, and which task a match
+belongs to when it came from a delegated turn. Every hit also reports its conversation
+and **exchange number**, so a search leads straight into `lookup-session` for the full
+exchange. Narrow further by project, by specific or recent sessions, by time window, or
+by kind of message — and sort by relevance or most-recent. See
 [Conversation archive](transcripts.md).
 
 ## How your agent knows all this

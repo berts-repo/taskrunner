@@ -25,38 +25,81 @@ edits them, so your agents' own session-resume keeps working.
 
 ## Reading it back
 
-Three ways through your agent, depending on what you're after:
+A single conversation runs to hundreds of messages, so reading the archive is two
+steps: **find** something, then **read just that piece of it**.
 
-- **Browse whole conversations** — `lookup-session` lists your recent sessions
-  (newest first, optionally within one project), so you can ask for "the last session"
-  or "look through my last five". Give it a session id and you get that entire
-  conversation in order. This is the only way to read back **your own host sessions** —
-  they aren't tied to a task, so `lookup-task` can't see them. The most recent
-  transcripts are swept in on demand when you ask, so "the last session" reflects the
-  conversation you were just in, up to its last saved line.
-- **One task's interior** — ask `lookup-task` to include the **transcript**. You get
-  the tool calls, reasoning, and messages that ran inside that task's container.
-- **Search everything** — `search-transcripts` runs a full-text search across the
-  whole archive (worker turns *and* your host sessions) and returns matching messages
-  with a snippet and their project. When a match came from a delegated task, it tells
-  you which one. You can scope a search to a project, to specific or recent sessions,
-  to a time window, or to a kind of message — handy for "find where I discussed X in my
-  last few sessions".
+Every conversation is numbered by exchange — one thing you asked, plus everything that
+followed it. That number is the address. Search results carry it, outlines print it,
+and you hand it back to ask for that one exchange in full.
+
+### Through your agent
+
+- **Find it** — `search-transcripts` searches the whole archive (worker turns *and*
+  your host sessions) three ways, alone or in combination:
+  - **by text** — the words in a message.
+  - **by what a tool did** — which **tool** ran, and the **target** it acted on: a
+    file path, a command. This answers what text search answers badly, like "which
+    sessions touched `proxy.ts`".
+  - **by what failed** — only the calls that errored, or only the ones that worked.
+
+  Any search can be scoped to a project, to specific or recent sessions, to a time
+  window, or to a kind of message. Every hit reports the conversation it came from and
+  its exchange number, with a snippet and the task when the match came from a
+  delegated turn.
+- **Read it** — `lookup-session` with no id **lists your recent sessions**, newest
+  first, so you can ask for "the last session" or "look through my last five". Given a
+  session id it returns an **outline**: one line per exchange, with the reply's opening
+  line and each tool call and what it touched — enough to see the shape of a
+  conversation without paying for its contents. Then ask for one exchange by number and
+  you get it in full. The whole conversation end to end is available too, for when you
+  genuinely need all of it.
+
+  This is also the only way to read back **your own host sessions** — they aren't tied
+  to a task, so `lookup-task` can't see them. The most recent transcripts are swept in
+  on demand when you ask, so "the last session" reflects the conversation you were just
+  in, up to its last saved line.
+- **One task's interior** — ask `lookup-task` to include the **transcript**: the tool
+  calls, reasoning, and messages that ran inside that task's container, with the same
+  outline / one-exchange / whole-conversation choice.
 
 ### From the terminal
 
 You don't need an agent to read the archive. The same lookups are available as
-commands, printing straight to your shell — useful for a quick grep without spending a
-conversation:
+commands, printing straight to your shell — useful for a quick look without spending a
+conversation.
+
+The terminal starts from a different place on purpose: it prints the **timeline** —
+the conversation itself, your prompts and the replies in full, with long tool output
+capped so it stays readable. A person at a shell wants to read; an agent scanning
+wants the outline, because it pays for every line it takes in. Same archive, same
+numbering, different starting point.
 
 ```sh
-taskrunner sessions                     # your recent sessions, newest first
-taskrunner sessions --project /path      # just this project
-taskrunner session <id>                  # one conversation in full
-taskrunner search "flaky proxy test"     # full-text search
-taskrunner search "proxy" --last-sessions 5   # …within your last 5 sessions
-taskrunner task <id> --include transcript     # one task's interior
-taskrunner tasks --project /path              # a project's recent tasks
+taskrunner sessions                          # your recent sessions, newest first
+taskrunner sessions --project /path          # just this project
+
+taskrunner session <id>                      # the conversation, as a timeline
+taskrunner session <id> --view outline       # one line per exchange and tool call
+taskrunner session <id> --prompt 3           # just exchange 3, in full
+taskrunner session <id> --tool-lines 0       # stop capping long tool output
+
+taskrunner search "flaky proxy test"                      # by text
+taskrunner search --tool Edit --target src/shim/proxy.ts  # by what a tool touched
+taskrunner search --failed true --tool Bash               # by what went wrong
+taskrunner search "proxy" --last-sessions 5               # …within your last 5 sessions
+
+taskrunner task <id> --include transcript    # one task's interior, same views
+taskrunner tasks --project /path             # a project's recent tasks
+```
+
+Search prints an exchange number on every hit, so the loop is the same two steps here:
+search, then `session <id> --prompt N`.
+
+A timeline of a real conversation is long and there is no built-in pager, so pipe it
+to one:
+
+```sh
+taskrunner session <id> | less
 ```
 
 Each command talks to the running daemon; if it isn't up yet, your agent's next
