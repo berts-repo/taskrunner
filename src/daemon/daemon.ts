@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { loadConfig, workerConfig, type Config, type WorkerConfig } from "../config.js";
 import { newId } from "../ids.js";
 import { TranscriptSweeper, type IngestSource } from "../ingest/sweep.js";
-import { dockerCopyOut } from "../ingest/volume.js";
+import { dockerCopyOut, reapCopyOutContainers } from "../ingest/volume.js";
 import type { StatePaths } from "../paths.js";
 import { ArtifactStore } from "../storage/artifacts.js";
 import { EventLog, readEvents, type EventBody, type LogEvent } from "../storage/events.js";
@@ -276,6 +276,13 @@ export class Daemon {
       // Owner-only: the socket is an unauthenticated control channel, so its
       // filesystem permissions are the access boundary.
       fs.chmodSync(paths.socketPath, 0o600);
+      // Before the first sweep, and only here: a copy-out container that is
+      // still around is garbage by definition at this point, but one created
+      // by a sweep in flight would not be. Never fatal — a stray container
+      // costs nothing, so failing to clear it must not keep the daemon down.
+      await reapCopyOutContainers().catch((err: Error) => {
+        process.stderr.write(`taskrunner: copy-out container reap failed: ${err.message}\n`);
+      });
       // Only once the socket is accepting: the first backfill can run for
       // minutes, and shims give the daemon a bounded window to become ready.
       daemon.startSweeping();

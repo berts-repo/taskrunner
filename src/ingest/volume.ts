@@ -16,6 +16,13 @@ import * as fs from "node:fs";
 // saves us.
 
 /**
+ * Marks the throwaway mount containers so a later daemon can recognize and
+ * reap the ones an earlier one left behind. Filtering on this label is what
+ * keeps the reap from ever touching a worker container.
+ */
+export const COPY_OUT_LABEL = "taskrunner.role=ingest-copyout";
+
+/**
  * Copies `<volume>/<subdir>` into `destDir` (created if missing, owner-only).
  * Rejects on any docker failure so the caller can log and skip the source.
  */
@@ -30,7 +37,15 @@ export async function dockerCopyOut(
   // readable only by the user running the daemon.
   fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(destDir, 0o700);
-  const created = await run(dockerCommand, ["create", "-v", `${volume}:/v:ro`, image, "true"]);
+  const created = await run(dockerCommand, [
+    "create",
+    "--label",
+    COPY_OUT_LABEL,
+    "-v",
+    `${volume}:/v:ro`,
+    image,
+    "true",
+  ]);
   const containerId = created.stdout.trim();
   if (!created.ok || !containerId) {
     throw new Error(`docker create failed for volume ${volume}: ${created.stderr.trim()}`);
@@ -48,6 +63,31 @@ export async function dockerCopyOut(
   } finally {
     await run(dockerCommand, ["rm", "-f", containerId]);
   }
+}
+
+/**
+ * Removes copy-out containers stranded by an earlier daemon and returns how
+ * many went away. `dockerCopyOut` deletes its own container on every path it
+ * controls, but a SIGKILL between `create` and that cleanup leaves one behind
+ * forever — `--rm` is no help, because auto-remove fires when a container
+ * exits and these never start. So the next daemon reaps them.
+ *
+ * Startup only, never mid-sweep: a running copy-out's container matches the
+ * same label, and pulling it out from under an in-flight `docker cp` would
+ * fail the sweep it belongs to.
+ */
+export async function reapCopyOutContainers(dockerCommand = "docker"): Promise<number> {
+  const listed = await run(dockerCommand, ["ps", "-aq", "--filter", `label=${COPY_OUT_LABEL}`]);
+  if (!listed.ok) {
+    throw new Error(`docker ps failed while reaping copy-out containers: ${listed.stderr.trim()}`);
+  }
+  const ids = listed.stdout.split("\n").filter((id) => id.trim().length > 0);
+  if (ids.length === 0) return 0;
+  const removed = await run(dockerCommand, ["rm", "-f", ...ids]);
+  if (!removed.ok) {
+    throw new Error(`docker rm failed while reaping copy-out containers: ${removed.stderr.trim()}`);
+  }
+  return ids.length;
 }
 
 function run(
