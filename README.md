@@ -47,6 +47,8 @@ login, is in the getting-started guide.
   setting with its default.
 - **[Network access](docs/network-access.md)** — how the firewall works and how to
   grant a task more reach.
+- **[Security](docs/security.md)** — what isolates a task, what it can still do, and
+  what gets recorded.
 - **[Conversation archive](docs/transcripts.md)** — what Taskrunner records, how to
   read it back, and how worker logins are stored.
 - **[Custom & local-model workers](docs/workers.md)** — add your own worker, including

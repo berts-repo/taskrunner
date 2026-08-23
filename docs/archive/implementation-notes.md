@@ -15,8 +15,9 @@ maintainer reference — the "why it's built this way" behind the features descr
   updates).
 - **The daemon rebuilds the index from the log on every boot.** This is why a schema
   change is safe with no migration step: bump `SCHEMA_VERSION` and the next start
-  repopulates a fresh index from `events.jsonl`. (Most recently, bumping 5 → 6 to add
-  the `transcript_sessions` aggregate needed no migration for exactly this reason.)
+  repopulates a fresh index from `events.jsonl`. (Most recently, bumping 6 → 7 to add
+  the per-message tool facts and prompt index needed no migration and no re-sweep for
+  exactly this reason — the log already held the content they are derived from.)
 - **Artifacts are content-addressed.** Diffs and raw worker event streams are stored
   by hash, referenced from the index.
 
@@ -88,6 +89,44 @@ table for search.
   a per-record timestamp still order by ingest time). Like everything here it is
   derived — a delete-and-rebuild replays the log and reconstructs it exactly.
 
+### Message facts (schema v7)
+
+`message-facts.ts` promotes a handful of objective facts out of each message's
+content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
+`is_error`, and the `prompt_idx` an exchange is addressed by. This is what turns
+"every Edit under `src/shim`" into a query instead of a grep over JSON.
+
+- **Only unambiguous facts get promoted.** They are re-derived on every rebuild, so a
+  wrong call here costs a delete-and-rebuild rather than a migration — but it also
+  means anything needing a judgement about conversation structure (parenting,
+  sidechains) is deliberately left out. `parent_message_id` / a message tree was
+  considered and dropped; the outline has since been used against real sessions
+  without wanting it.
+- **Structural, not source-switched.** `source` is free-form and new harnesses appear,
+  so each fact is read from whichever known field spelling is present (claude-code's
+  `id`/`tool_use_id`/`input`, codex's `call_id`/`arguments`, which also arrives as a
+  nested JSON *string*). An unrecognized shape yields nulls, never a throw.
+- **A target is an identifier, not a sentence.** `TARGET_KEYS` is an ordered list,
+  most specific first; prose keys (`description`, `prompt`, `explanation`) are excluded
+  on purpose, which is why prose-only tools legitimately have no `tool_target`. Codex
+  passes argv as an array, so a target is flattened to one line, whitespace collapsed,
+  and capped at 500 chars — the full text stays searchable through FTS.
+- **Failure is never guessed.** A harness-recorded `is_error` wins; otherwise the exit
+  status codex prints ahead of exec output is parsed. Records stating neither
+  (rejections, aborts, MCP payloads) stay NULL rather than being folded into a false
+  "succeeded".
+- **`prompt_idx` counts *real* prompts.** Sessions are full of user records the harness
+  wrote on the user's behalf, and counting those destroys the numbering as an address —
+  a session picks up more on every slash command, interruption and reminder. The
+  `HARNESS_PREFIXES` exclusion list was derived by surveying the whole live corpus, not
+  guessed, and matches as a prefix of the trimmed content. A real session measured 52
+  prompts against 68 raw `user/message` records.
+- **Everything before a session's first real prompt stays at 0**, which is why the
+  outline has a `[0] (before the first prompt)` group at all.
+- **The counter is read before the insert and committed only if the insert changed a
+  row** — inside the same `res.changes > 0` guard as the FTS insert and the session
+  aggregate, so a re-swept duplicate can never advance the numbering.
+
 ### Query surface
 
 - **`lookup-session`** lists sessions from `transcript_sessions` (recency, optional
@@ -103,6 +142,19 @@ table for search.
   (…)` (the latter resolved through `listSessions`); `role`/`kind`/`since`/`until`
   filter the FTS row's UNINDEXED columns; `sort:"recent"` orders by `native_ts` instead
   of `rank`.
+- **Filter-only search.** With no `query` the same function drops the FTS
+  join and scans `messages` directly on the v7 fact columns, ordered by recency — so
+  `tool`/`target`/`failed` are a search in their own right, not just a narrowing of a
+  text hit. `target` matches `LIKE %…%` (paths are searched by fragment); `tool` is
+  exact. The filter names on both wires are `tool`/`target`/`failed`, not the column
+  spellings.
+- **A call and its result are one thing.** `ERROR_STATE` coalesces a row's own
+  `is_error` with its pair's, so `failed` composes with `tool`/`target` — which only
+  exist on the *call* record. Because both halves then match, a filter-only search adds
+  `kind = 'tool_use'` (the useful half: it names the tool and the target), or one
+  failure would be reported twice. Deliberately **not** applied when there is a text
+  query: there the caller asked for whichever record their words appear in. Results
+  stating no outcome are NULL and so fall out of `failed:true` *and* `failed:false`.
 - **On-demand host sweep.** Session-recency queries call `sweep({ hostOnly: true })`
   first — it skips volume sources (no `docker cp`), so the newest host session reflects
   the live conversation without paying for a worker-volume copy-out. Coalescing is
@@ -111,6 +163,59 @@ table for search.
   `/search-transcripts`, `/lookup-task`) over the control socket that call the *same*
   renderers as the tools, so `taskrunner sessions|session|search|task|tasks` print
   byte-identical output without opening an MCP session.
+
+### Rendering: the three views
+
+`transcript-view.ts` owns all three renderers plus the compact-line helpers moved out
+of `lookup.ts` (which still uses them for audit/trace rows, so the import direction is
+lookup → transcript-view; reversing it makes a cycle).
+
+- **`outline`** — the session as an index: a counts line, then one block per exchange
+  headed by its `[N]` address, one line per reply and per tool call. Every call gets a
+  line in the order it was made, because a collapsed or capped list stops the outline
+  being a *complete* index of what happened.
+- **`compact`** — one truncated line per message, every message, one scan.
+- **`timeline`** — the audit view: bodies printed unindented and unmodified so code and
+  diffs stay copy-pasteable. The prompt index is stamped on the first message of each
+  exchange only; that is the address `--prompt N` takes, and repeating it every line is
+  noise.
+
+**The clipping rule.** What the conversation *said* is never clipped — user prompts,
+assistant replies, reasoning. Everything else is harness furniture and shares the
+`--tool-lines` budget (default 20, `0` = all): tool inputs, tool results, and
+developer/system preambles, the last of which matters because a codex worker session
+opens with ~15k characters of them. Tool inputs render the target on line 1 and the
+remaining input keys after it, so a Write/Edit payload stays in the audit trail.
+
+**The outline never loads a body.** It is fed by its own query, not the message path:
+prose is `substr(content, 1, 400)` in SQL, `tool_use` rows select NULL, and
+`tool_result` rows are excluded outright (their failure state is already folded onto
+the call). Reasoning, developer preambles and harness-written user records are left
+out — a user record that does not *open* a prompt group is by definition one the
+harness wrote. Measured on a 240-message session: outline 13k bytes, compact 47k,
+timeline 123k. The `[0]` heading is deferred until something files under it, and must
+be cleared when a new group opens or it leaks into the next one.
+
+**View resolution is what made the default flip safe.** `resolveView`: an explicit
+`view` wins; else `prompt N` → `timeline` (drilling into one exchange means reading
+it); else `last` → `compact` (a bounded message read, exactly as before); else
+`outline`. Without those two carve-outs, changing the default would have silently
+changed every existing caller. The drill-down selector is `prompt` on the MCP wire and
+`--prompt N` on the CLI, mapped to `promptIdx` internally (`viewArgs` in
+`mcp-server.ts`) because `prompt` already means the worker instruction on `assign-task`.
+
+**Defaults are split by surface on purpose.** The CLI defaults to `timeline` with no
+message cap (`limit: null` → `LIMIT -1`) and always sends `view` explicitly; the MCP
+tools and daemon routes resolve to `outline`, and the 500-message cap still applies
+whenever they fall to a message view. (The outline itself is not capped — it is an
+index, and a partial one would be a lie.) A person at a shell wants to read; an agent
+scanning pays for every line it takes in — so the two surfaces never have to agree. An
+explicit `last` always wins.
+
+Two incidental hazards worth keeping: the CLI's `BOOLEAN_FLAGS` table is gone, because
+a bare `--failed` would swallow the next argv entry as the query (`--failed true|false`
+takes a value); and `src/cli.ts` guards EPIPE at the bottom, latent before but
+unavoidable once output is timeline-sized and piped to `head`/`less`.
 
 ### Sweeper invariants (load-bearing)
 
