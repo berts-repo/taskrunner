@@ -464,6 +464,19 @@ internal, not frozen.
    `up`/`down`/`status` land here — the daemon is untestable from outside without
    them. *Check:* `daemon` cases except the config-only-worker one, the shim race
    test, and `claude mcp add` against the Rust binary showing zero tools.
+   **Done 2026-09-13**, with one decision the spike had not covered: MCP
+   protocol `2026-07-28` removes sessions, and rmcp then serves each request
+   statelessly, so "one taskrunner session per connected client" cannot ride on
+   its HTTP session manager without depending on the protocol version Claude
+   Code negotiates. The shim↔daemon transport is internal, so the daemon now
+   listens on two sockets: `runtime/daemon.sock` stays HTTP (`/status`, the
+   read routes) and `runtime/mcp.sock` serves one rmcp service per connection
+   as newline-delimited JSON-RPC; the shim pumps the client's stdio to it byte
+   for byte, so a connection *is* a session. The CLI parses arguments by hand
+   — usage text and error messages are frozen output — so `clap` is not used.
+   Checks: 7 daemon tests (the shim race runs the real binary), and 18 routes
+   fetched from both daemons booted on the corpus, byte-identical including
+   error bodies and status codes.
 5. **Workers** — two PRs. *5a* `workers/runner` (docker argv, network, proxy
    sidecar, egress log → `on_egress`, `dispose`), `workspace/{git,clone}`; tests
    `runner`, `clone`. *5b* `workers/{harness,claude,codex}`; tests `claude`, `codex`
@@ -493,9 +506,8 @@ internal, not frozen.
 |---|---|
 | JSONL, config | `serde`, `serde_json` (`preserve_order`), `toml` |
 | SQLite + FTS5 | `rusqlite` (bundled) |
-| Async, socket, process spawn | `tokio`, `hyper` |
+| Async, sockets, HTTP, process spawn | `tokio`, `axum`, `hyper` |
 | MCP | `rmcp` (official Rust SDK) |
-| CLI | `clap` |
 | Ids | `ulid` |
 | Tests | `cargo test`; `insta` for new snapshots only |
 

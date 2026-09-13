@@ -61,8 +61,7 @@ impl Default for ResourceLimits {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct WorkerConfig {
     /// Defaults to the worker's own name, so `[worker.codex]` needs nothing;
     /// a custom worker names the loop it reuses (e.g. `[worker.qwen] harness = "codex"`).
@@ -82,6 +81,37 @@ pub struct WorkerConfig {
     pub limits: ResourceLimits,
 }
 
+/// As written in the file: a list left out is filled with a built-in default,
+/// a list written empty stays empty — the same distinction zod's `.default()`
+/// draws, which is why these are Options here and plain lists in `WorkerConfig`.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct RawWorker {
+    harness: Option<HarnessKind>,
+    model: Option<String>,
+    provider: Option<Provider>,
+    image: Option<String>,
+    auth_volume: Option<String>,
+    allowed_domains: Option<Vec<String>>,
+    limits: ResourceLimits,
+}
+
+impl RawWorker {
+    fn into_worker(self, default_domains: &[&str]) -> WorkerConfig {
+        WorkerConfig {
+            harness: self.harness,
+            model: self.model,
+            provider: self.provider,
+            image: self.image,
+            auth_volume: self.auth_volume,
+            allowed_domains: self
+                .allowed_domains
+                .unwrap_or_else(|| default_domains.iter().map(|d| d.to_string()).collect()),
+            limits: self.limits,
+        }
+    }
+}
+
 /// A transcript ingestion source: a set of *host* directories read by the
 /// parser its `format` names. Worker transcripts living inside Docker auth
 /// volumes are not configured — they are derived from each worker's own
@@ -92,15 +122,18 @@ pub struct WorkerConfig {
 /// Strict on purpose: an unknown key here — a stray `volume`, a `dir` typo —
 /// would otherwise be dropped in silence, and a source that silently ingests
 /// nothing is worse than one that refuses to load.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct IngestSourceConfig {
-    /// Parser format; a custom source names the parser it reuses. Optional in
-    /// the file only for the built-in sources, which default it to their name.
-    #[serde(default)]
-    pub format: Option<String>,
-    #[serde(default)]
+    /// Parser format; a custom source names the parser it reuses.
+    pub format: String,
     pub dirs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RawSource {
+    format: Option<String>,
+    dirs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,25 +163,30 @@ impl Default for EgressConfig {
 /// Interval and sources live under one [ingest] section; sources nest one
 /// level deeper so the scalar interval_seconds does not collide with the
 /// source catch-all.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct IngestConfig {
     /// How often the daemon sweeps transcript sources into the event log.
     pub interval_seconds: NonZeroU64,
     pub sources: IndexMap<String, IngestSourceConfig>,
 }
 
-impl Default for IngestConfig {
-    fn default() -> IngestConfig {
-        IngestConfig {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+struct RawIngest {
+    interval_seconds: NonZeroU64,
+    sources: IndexMap<String, RawSource>,
+}
+
+impl Default for RawIngest {
+    fn default() -> RawIngest {
+        RawIngest {
             interval_seconds: NonZeroU64::new(300).expect("nonzero"),
             sources: IndexMap::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Config {
     pub task: TaskConfig,
     /// Workers are pluggable: any `[worker.<name>]` section needs only a
@@ -157,6 +195,15 @@ pub struct Config {
     pub worker: IndexMap<String, WorkerConfig>,
     pub egress: EgressConfig,
     pub ingest: IngestConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct RawConfig {
+    task: TaskConfig,
+    worker: IndexMap<String, RawWorker>,
+    egress: EgressConfig,
+    ingest: RawIngest,
 }
 
 impl Config {
@@ -168,15 +215,21 @@ impl Config {
 
 /// Parses config text and fills in the built-in workers and sources.
 pub fn parse_config(text: &str) -> anyhow::Result<Config> {
-    let mut config: Config = toml::from_str(text)?;
-    for (name, worker) in &config.worker {
+    let raw: RawConfig = toml::from_str(text)?;
+    for (name, worker) in &raw.worker {
         if worker.limits.cpus <= 0.0 {
             anyhow::bail!("worker.{name}.limits.cpus must be positive");
         }
     }
-    config.worker = with_builtin_workers(config.worker);
-    config.ingest.sources = with_builtin_sources(config.ingest.sources)?;
-    Ok(config)
+    Ok(Config {
+        task: raw.task,
+        worker: with_builtin_workers(raw.worker),
+        egress: raw.egress,
+        ingest: IngestConfig {
+            interval_seconds: raw.ingest.interval_seconds,
+            sources: with_builtin_sources(raw.ingest.sources)?,
+        },
+    })
 }
 
 pub fn load_config(path: &Path) -> anyhow::Result<Config> {
@@ -196,15 +249,12 @@ pub fn worker_config(config: &Config, worker: &str) -> WorkerConfig {
 /// The built-in workers first (so they are always present and listed first),
 /// then every custom section in file order.
 fn with_builtin_workers(
-    configured: IndexMap<String, WorkerConfig>,
+    mut configured: IndexMap<String, RawWorker>,
 ) -> IndexMap<String, WorkerConfig> {
-    let builtin = |name: &str, image: &str, volume: &str, domains: &[&str]| {
-        let mut worker = configured.get(name).cloned().unwrap_or_default();
+    let mut builtin = |name: &str, image: &str, volume: &str, domains: &[&str]| {
+        let mut worker = configured.shift_remove(name).unwrap_or_default().into_worker(domains);
         worker.image.get_or_insert_with(|| image.to_string());
         worker.auth_volume.get_or_insert_with(|| volume.to_string());
-        if !configured.get(name).is_some_and(|w| !w.allowed_domains.is_empty()) {
-            worker.allowed_domains = domains.iter().map(|d| d.to_string()).collect();
-        }
         (name.to_string(), worker)
     };
     let mut workers = IndexMap::from([
@@ -224,7 +274,7 @@ fn with_builtin_workers(
         ),
     ]);
     for (name, worker) in configured {
-        workers.entry(name).or_insert(worker);
+        workers.insert(name, worker.into_worker(&[]));
     }
     workers
 }
@@ -232,31 +282,25 @@ fn with_builtin_workers(
 /// The built-in sources first, then every custom section in file order. A
 /// custom source must name its parser format.
 fn with_builtin_sources(
-    configured: IndexMap<String, IngestSourceConfig>,
+    mut configured: IndexMap<String, RawSource>,
 ) -> anyhow::Result<IndexMap<String, IngestSourceConfig>> {
-    let builtin = |name: &str, dir: &str| {
-        let mut source = configured
-            .get(name)
-            .cloned()
-            .unwrap_or(IngestSourceConfig { format: None, dirs: vec![] });
-        source.format.get_or_insert_with(|| name.to_string());
-        if source.dirs.is_empty() {
-            source.dirs = vec![dir.to_string()];
-        }
+    let mut builtin = |name: &str, dir: &str| {
+        let raw = configured.shift_remove(name).unwrap_or_default();
+        let source = IngestSourceConfig {
+            format: raw.format.unwrap_or_else(|| name.to_string()),
+            dirs: raw.dirs.unwrap_or_else(|| vec![dir.to_string()]),
+        };
         (name.to_string(), source)
     };
     let mut sources = IndexMap::from([
         builtin("claude-code", "~/.claude/projects"),
         builtin("codex", "~/.codex/sessions"),
     ]);
-    for (name, source) in configured {
-        if sources.contains_key(&name) {
-            continue; // a built-in, already defaulted above
-        }
-        if source.format.is_none() {
-            anyhow::bail!("ingest.sources.{name} needs a format");
-        }
-        sources.insert(name, source);
+    for (name, raw) in configured {
+        let Some(format) = raw.format else {
+            anyhow::bail!("ingest.sources.{name} needs a format")
+        };
+        sources.insert(name, IngestSourceConfig { format, dirs: raw.dirs.unwrap_or_default() });
     }
     Ok(sources)
 }

@@ -4,6 +4,7 @@ pub mod artifacts;
 pub mod events;
 pub mod facts;
 pub mod index;
+pub mod store;
 
 use events::{EventBody, LogEvent};
 

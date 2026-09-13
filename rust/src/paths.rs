@@ -14,7 +14,10 @@ pub struct StatePaths {
     pub config_file: PathBuf,
     pub ingest_state_file: PathBuf,
     pub ingest_staging_dir: PathBuf,
+    /// HTTP: `/status` and the read-only query routes.
     pub socket_path: PathBuf,
+    /// One MCP session per connection, newline-delimited JSON-RPC.
+    pub mcp_socket_path: PathBuf,
     pub pid_file: PathBuf,
     pub lock_file: PathBuf,
 }
@@ -36,6 +39,7 @@ pub fn state_paths(root: &Path) -> StatePaths {
         ingest_state_file: root.join("ingest-state.json"),
         ingest_staging_dir: root.join("ingest-staging"),
         socket_path: runtime_dir.join("daemon.sock"),
+        mcp_socket_path: runtime_dir.join("mcp.sock"),
         pid_file: runtime_dir.join("daemon.pid"),
         lock_file: runtime_dir.join("daemon.lock"),
         runtime_dir,

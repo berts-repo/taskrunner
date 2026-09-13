@@ -99,7 +99,7 @@ pub fn ingest_sources(config: &Config) -> Vec<IngestSource> {
         .sources
         .values()
         .map(|source| IngestSource {
-            format: source.format.clone().unwrap_or_default(),
+            format: source.format.clone(),
             dirs: source.dirs.clone(),
             ..Default::default()
         })

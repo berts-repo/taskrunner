@@ -68,6 +68,15 @@ fn keeps_built_in_defaults_for_keys_a_section_leaves_out() {
     assert_eq!(claude.limits.pids, NonZeroU64::new(512).unwrap());
 }
 
+#[test]
+fn an_empty_list_written_out_stays_empty() {
+    let text = "[worker.codex]\nallowed_domains = []\n[ingest.sources.claude-code]\ndirs = []\n";
+    let config = parse_config(text).unwrap();
+    assert!(worker_config(&config, "codex").allowed_domains.is_empty());
+    assert!(config.ingest.sources["claude-code"].dirs.is_empty());
+    assert_eq!(config.ingest.sources["codex"].dirs, vec!["~/.codex/sessions"]);
+}
+
 // ---- ingest sources ----------------------------------------------------------
 
 #[test]

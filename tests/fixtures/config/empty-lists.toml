@@ -1,0 +1,6 @@
+# An empty list written out stays empty; only a missing key takes a default.
+[worker.codex]
+allowed_domains = []
+
+[ingest.sources.claude-code]
+dirs = []
