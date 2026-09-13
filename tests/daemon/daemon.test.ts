@@ -8,8 +8,8 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { AlreadyRunningError, Daemon, type DaemonOptions } from "../../src/daemon/daemon.js";
 import { statePaths } from "../../src/paths.js";
 import { EventLog, readEvents } from "../../src/storage/events.js";
-import { initGitRepo, LocalRunner, tempDir } from "../helpers.js";
-import { writeFakeCodex } from "../workers/fake-codex.js";
+import { fakeCodex, initGitRepo, LocalRunner, tempDir } from "../helpers.js";
+
 
 function unixFetch(socketPath: string): typeof fetch {
   const agent = new Agent({ connect: { socketPath } });
@@ -141,9 +141,9 @@ describe("Daemon", () => {
 
     const repo = initGitRepo();
 
-    const fakeCodex = writeFakeCodex();
+    const codexBin = fakeCodex();
     const daemon = await startDaemon(root, {
-      makeRunner: (ctx) => new LocalRunner(ctx.workspaceDir, fakeCodex),
+      makeRunner: (ctx) => new LocalRunner(ctx.workspaceDir, codexBin),
     });
     const assigned = await daemon.scheduler.assignTask({
       project: repo,

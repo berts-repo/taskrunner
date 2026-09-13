@@ -8,8 +8,8 @@ import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
 import { CloneWorkspaces } from "../../src/workspace/clone.js";
-import { initGitRepo, LocalRunner, tempDir } from "../helpers.js";
-import { writeFakeCodex } from "./fake-codex.js";
+import { fakeCodex, initGitRepo, LocalRunner, tempDir } from "../helpers.js";
+
 
 function makeStack(codexCommand: string) {
   const root = tempDir("stack");
@@ -38,7 +38,7 @@ function makeStack(codexCommand: string) {
 describe("scheduler + clone workspace + codex harness", () => {
   it("delegates, edits in the task workspace, resumes the same thread", async () => {
     const repo = initGitRepo();
-    const { scheduler, index, workspacesDir } = makeStack(writeFakeCodex());
+    const { scheduler, index, workspacesDir } = makeStack(fakeCodex());
 
     const first = await scheduler.assignTask({
       project: repo,

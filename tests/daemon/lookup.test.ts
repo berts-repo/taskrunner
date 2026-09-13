@@ -8,8 +8,8 @@ import { EventLog } from "../../src/storage/events.js";
 import { StateIndex } from "../../src/storage/index.js";
 import { CodexHarness } from "../../src/workers/codex.js";
 import { CloneWorkspaces } from "../../src/workspace/clone.js";
-import { initGitRepo, LocalRunner, tempDir } from "../helpers.js";
-import { writeFakeCodex } from "../workers/fake-codex.js";
+import { fakeCodex, initGitRepo, LocalRunner, tempDir } from "../helpers.js";
+
 
 // One real two-turn task built through the whole stack (fake codex binary +
 // clone workspaces), then lookup assertions against it.
@@ -32,14 +32,14 @@ beforeAll(async () => {
   };
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const clones = new CloneWorkspaces(join(root, "workspaces"), artifacts, record);
-  const fakeCodex = writeFakeCodex();
+  const codexBin = fakeCodex();
   const scheduler = new Scheduler({
     config: parseConfig({}),
     index,
     record,
     harnesses: new Map([["codex", new CodexHarness()]]),
     workspaces: clones,
-    makeRunner: (ctx) => new LocalRunner(ctx.workspaceDir, fakeCodex),
+    makeRunner: (ctx) => new LocalRunner(ctx.workspaceDir, codexBin),
     artifacts,
   });
   deps = { index, artifacts };

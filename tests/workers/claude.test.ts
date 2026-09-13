@@ -2,8 +2,8 @@ import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ClaudeHarness } from "../../src/workers/claude.js";
 import type { WorkerEvent } from "../../src/workers/harness.js";
-import { LocalRunner, tempDir } from "../helpers.js";
-import { writeFakeClaude } from "./fake-claude.js";
+import { fakeClaude, LocalRunner, tempDir } from "../helpers.js";
+
 
 // realpath matters: the fake claude reports file_path from its resolved cwd
 // (/private/var/... on macOS), and prefix stripping compares string paths.
@@ -17,7 +17,7 @@ function collect() {
 }
 
 function fakeRunner(workspace: string): LocalRunner {
-  return new LocalRunner(workspace, writeFakeClaude());
+  return new LocalRunner(workspace, fakeClaude());
 }
 
 describe("ClaudeHarness", () => {

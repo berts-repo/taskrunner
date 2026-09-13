@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { CodexHarness } from "../../src/workers/codex.js";
 import type { WorkerEvent } from "../../src/workers/harness.js";
 import type { WorkerRunner, WorkerSpawnSpec } from "../../src/workers/runner.js";
-import { LocalRunner, tempDir } from "../helpers.js";
-import { writeFakeCodex } from "./fake-codex.js";
+import { fakeCodex, LocalRunner, tempDir } from "../helpers.js";
+
 
 function collect() {
   const events: WorkerEvent[] = [];
@@ -13,7 +13,7 @@ function collect() {
 
 /** Local runner whose command override points at the fake codex script. */
 function fakeRunner(workspace: string): LocalRunner {
-  return new LocalRunner(workspace, writeFakeCodex());
+  return new LocalRunner(workspace, fakeCodex());
 }
 
 describe("CodexHarness", () => {

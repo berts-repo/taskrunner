@@ -196,3 +196,13 @@ export function parseFixture(parser: TranscriptParser, relative: string): Parsed
   });
   return out;
 }
+
+/** The scripted stand-in for the codex CLI: tests/fixtures/fake-codex.cjs. */
+export function fakeCodex(): string {
+  return fixturePath("fake-codex.cjs");
+}
+
+/** The scripted stand-in for the claude CLI: tests/fixtures/fake-claude.cjs. */
+export function fakeClaude(): string {
+  return fixturePath("fake-claude.cjs");
+}
