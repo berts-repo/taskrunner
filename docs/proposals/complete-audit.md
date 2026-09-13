@@ -135,6 +135,24 @@ would leave the old history as a permanent "trust me" zone or require re-hashing
 — exactly the act the chain exists to make suspicious. Cost: one field per line,
 under 5% of the log.
 
+## Decided: every harness is both a host and a worker
+
+Hermes is a worker as well as a host: `[worker.hermes]` — an image, its headless
+mode, its login in an auth volume — so Claude Code or Codex can delegate a task *to*
+Hermes in a container the same way they delegate to Codex today. The harness table
+(`HARNESS_KINDS`, `AUTH_MOUNTS`, transcript layout) grows one row.
+
+The same applies to any harness added later — OpenClaw is the next expected one —
+and it applies as a rule, not a case: a new harness is a `[host.<name>]` section, a
+`[worker.<name>]` section, and a parser. Nothing about audit, capture, search scope
+or delegation is written for a specific harness.
+
+## Decided: the archive records its own gaps
+
+Config changes, task assignments and capture on/off are logged as events alongside
+egress decisions and changed files. An audit that cannot show when it was told to
+stop looking is incomplete.
+
 ## Install flow (sketch)
 
 ```
@@ -414,11 +432,6 @@ Clean and readable is a goal of the redesign, not a nicety after it.
 
 ## Open questions
 
-- **Scope of "audit".** Egress decisions and changed files are logged already.
-  Config changes, task assignments and capture on/off events are not; they should
-  be, so the archive shows its own gaps.
-- **Hermes as a worker.** Hermes is a *host* in this proposal. Is `[worker.hermes]`
-  (an image, its headless mode, its login) wanted too?
 - **Hermes parser.** `state.db` schema is versioned and migrates; the parser reads
   `sessions` + `messages` (read-only, WAL is fine while Hermes writes) and must
   tolerate drift. Lean: ingest every source including `subagent`/`kanban`, demote
