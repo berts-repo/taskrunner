@@ -4,3 +4,11 @@ pub mod artifacts;
 pub mod events;
 pub mod facts;
 pub mod index;
+
+use events::{EventBody, LogEvent};
+
+/// The single durable write path: append to the log, fold into the index.
+/// The daemon implements it; tests implement it over an in-memory stack.
+pub trait Recorder {
+    fn record(&self, body: EventBody) -> anyhow::Result<LogEvent>;
+}

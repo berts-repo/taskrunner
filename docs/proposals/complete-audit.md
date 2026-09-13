@@ -420,7 +420,14 @@ internal, not frozen.
    golden master; `insta` is for new tests only. **1a done 2026-09-13**: parity on
    the corpus is empty (2,411 messages, every table); 26 tests; the JS-vs-Rust
    traps above were handled in `facts.rs` (JS whitespace class, UTF-16 slicing,
-   number printing) and none showed in the diff.
+   number printing) and none showed in the diff. **1b done 2026-09-13**: 66 more
+   tests; `scripts/parity-views.sh` renders 58 views over the corpus (session
+   list, outlines, compact and timeline reads, searches, task lookups) with both
+   implementations and diffs empty — 587 KB byte for byte. The lookup-task test
+   seeds the events the scheduler wrote into the corpus instead of driving the
+   scheduler; step 6 adds the stack-driven version. `render.ts` (tool outcome
+   text) moves to step 6 with the scheduler result it renders. `parity-views`
+   is retired when step 7's `parity-cli` covers the same ground.
 2. **Ingest.** First a TypeScript PR that moves the inline sample lines into
    `tests/fixtures/{claude-code,codex}/*.jsonl` (no behaviour change). Then
    `ingest/{parser,claude_code,codex,registry,sweep,volume}`. The sweep runs on

@@ -17,6 +17,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::js;
+
 /// Longest tool_target retained. Full text stays searchable via FTS.
 const MAX_TARGET: usize = 500;
 
@@ -90,7 +92,7 @@ pub fn message_facts(role: &str, kind: &str, content: &str) -> MessageFacts {
 }
 
 fn tool_facts(kind: &str, content: &str) -> MessageFacts {
-    let Some(blob) = parse_object_text(content) else {
+    let Some(blob) = js::parse_object_text(content) else {
         return MessageFacts::default();
     };
     if kind == "tool_result" {
@@ -100,7 +102,7 @@ fn tool_facts(kind: &str, content: &str) -> MessageFacts {
             ..MessageFacts::default()
         };
     }
-    let input = first_present(&blob, &["input", "arguments"]).and_then(parse_object);
+    let input = js::first_present(&blob, &["input", "arguments"]).and_then(js::parse_object);
     MessageFacts {
         tool_use_id: string_at(&blob, &["id", "call_id"]),
         tool_name: string_at(&blob, &["name"]),
@@ -117,14 +119,14 @@ fn result_error(blob: &Map<String, Value>) -> Option<i64> {
     if let Some(Value::Bool(flag)) = blob.get("is_error") {
         return Some(if *flag { 1 } else { 0 });
     }
-    let output = first_present(blob, &["output", "content"])?.as_str()?;
+    let output = js::first_present(blob, &["output", "content"])?.as_str()?;
     let code = exit_code(output)?;
     Some(if code == 0 { 0 } else { 1 })
 }
 
 /// The first line that opens with an exec preamble, and the digits after it.
 fn exit_code(output: &str) -> Option<u64> {
-    output.split(is_js_line_terminator).find_map(|line| {
+    output.split(js::is_line_terminator).find_map(|line| {
         EXIT_PREAMBLES.iter().find_map(|preamble| {
             let digits: String =
                 line.strip_prefix(preamble)?.chars().take_while(char::is_ascii_digit).collect();
@@ -136,7 +138,7 @@ fn exit_code(output: &str) -> Option<u64> {
 fn target(input: &Map<String, Value>) -> Option<String> {
     TARGET_KEYS.iter().find_map(|key| {
         let flat = flatten(input.get(*key)?)?;
-        Some(truncate_utf16(&flat, MAX_TARGET))
+        Some(js::slice_to(&flat, MAX_TARGET))
     })
 }
 
@@ -148,88 +150,28 @@ fn flatten(value: &Value) -> Option<String> {
         }
         other => string_or_number(other)?,
     };
-    let collapsed = collapse_whitespace(&raw);
+    let collapsed = js::collapse_whitespace(&raw);
     if collapsed.is_empty() { None } else { Some(collapsed) }
 }
 
 fn string_or_number(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(js_number_string(n)),
+        Value::Number(n) => Some(js::number(n)),
         _ => None,
     }
-}
-
-/// JSON objects arrive both parsed and as nested strings (codex `arguments`).
-fn parse_object(value: &Value) -> Option<Map<String, Value>> {
-    match value {
-        Value::String(text) => parse_object_text(text),
-        Value::Object(map) => Some(map.clone()),
-        _ => None,
-    }
-}
-
-fn parse_object_text(text: &str) -> Option<Map<String, Value>> {
-    parse_object(&serde_json::from_str(text).ok()?)
-}
-
-/// The first of `keys` present with a non-null value (JavaScript's `??`).
-fn first_present<'a>(blob: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
-    keys.iter().find_map(|key| blob.get(*key)).filter(|v| !v.is_null())
 }
 
 /// The first present key's value if it is a non-empty string.
 fn string_at(blob: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    let value = first_present(blob, keys)?.as_str()?;
+    let value = js::first_present(blob, keys)?.as_str()?;
     if value.is_empty() { None } else { Some(value.to_string()) }
 }
 
 fn is_prompt(content: &str) -> bool {
-    let trimmed = content.trim_start_matches(is_js_whitespace);
+    let trimmed = js::trim_start(content);
     if trimmed.is_empty() {
         return false;
     }
     !HARNESS_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix))
-}
-
-// ---- JavaScript string semantics -----------------------------------------
-
-/// JavaScript's `\s` (and `trim`) whitespace class. Rust's `is_whitespace`
-/// differs at the edges (NEL is in, the BOM is out), so it is spelled out.
-fn is_js_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
-    )
-}
-
-/// What `^` matches after in a JavaScript multiline regex.
-fn is_js_line_terminator(c: char) -> bool {
-    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
-}
-
-/// `raw.replace(/\s+/g, " ").trim()`.
-fn collapse_whitespace(raw: &str) -> String {
-    raw.split(is_js_whitespace).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
-}
-
-/// `text.slice(0, max)` counts UTF-16 code units, not characters.
-fn truncate_utf16(text: &str, max: usize) -> String {
-    let units: Vec<u16> = text.encode_utf16().take(max).collect();
-    String::from_utf16_lossy(&units)
-}
-
-/// `String(n)`: integers print without a fraction.
-fn js_number_string(n: &serde_json::Number) -> String {
-    match n.as_f64() {
-        Some(f) if f.fract() == 0.0 && f.abs() < 1e21 => format!("{}", f as i128),
-        _ => n.to_string(),
-    }
 }

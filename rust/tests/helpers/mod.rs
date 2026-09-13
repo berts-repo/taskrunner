@@ -1,4 +1,6 @@
 //! Shared test scaffolding, mirroring the TypeScript tests/helpers.ts.
+//! Included by several test binaries, so each uses only part of it.
+#![allow(dead_code)]
 
 use std::cell::Cell;
 
