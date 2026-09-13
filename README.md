@@ -54,5 +54,6 @@ login, is in the getting-started guide.
 - **[Custom & local-model workers](docs/workers.md)** — add your own worker, including
   an offline local model.
 
-For maintainers, the design rationale and internals live in
-[docs/archive/implementation-notes.md](docs/archive/implementation-notes.md).
+For maintainers: the design rationale and internals live in
+[docs/internals.md](docs/internals.md), and design notes that aren't built yet in
+[docs/proposals/](docs/proposals/).

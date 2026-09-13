@@ -1,7 +1,7 @@
 # Complete audit — proposal (not implemented)
 
 Noted 2026-09-13. Nothing here is built. This captures a design conversation so the
-decisions survive; see [SESSION-HANDLES.md](SESSION-HANDLES.md) for the same kind of
+decisions survive; see [session-handles.md](session-handles.md) for the same kind of
 note on a different topic.
 
 ## The goal

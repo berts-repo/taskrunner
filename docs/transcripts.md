@@ -137,4 +137,4 @@ whatever a worker does gets archived by whoever is watching that shared cabinet.
 
 The internal format of the archive — how records are de-duplicated, indexed for
 search, and copied out of worker storage — is in the
-[implementation notes](archive/implementation-notes.md#conversation-archive).
+[implementation notes](internals.md#conversation-archive).

@@ -2,7 +2,7 @@
 
 Design rationale and internals, kept out of the user-facing docs. This is a
 maintainer reference — the "why it's built this way" behind the features described in
-[the docs](../). Nothing here is needed to *use* Taskrunner.
+[the docs](./). Nothing here is needed to *use* Taskrunner.
 
 ## Storage model
 
