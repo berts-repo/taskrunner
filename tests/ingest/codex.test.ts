@@ -1,47 +1,37 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { codexParser } from "../../src/ingest/codex.js";
 import type { FileContext } from "../../src/ingest/parser.js";
+import { fixtureLines, fixturePath, parseFixture } from "../helpers.js";
+
+// One rollout file in the shape Codex writes, shared with the Rust port's
+// tests along with expected.json. The filename carries the session id.
+const FIXTURE =
+  "codex/rollout-2026-01-01T00-00-00-11111111-2222-3333-4444-555555555555.jsonl";
+const [META, MESSAGE, CALL, OUTPUT, REASONING, EVENT_MSG, TURN_CONTEXT] = fixtureLines(FIXTURE);
 
 function ctx(lineIndex = 0): FileContext {
-  return { filePath: "/s/2026/01/01/rollout-2026-01-01T00-00-00-11111111-2222-3333-4444-555555555555.jsonl", lineIndex };
+  return { filePath: fixturePath(FIXTURE), lineIndex };
 }
 
-const META = JSON.stringify({
-  type: "session_meta",
-  timestamp: "2026-01-01T00:00:00Z",
-  payload: { id: "cs1", cwd: "/proj" },
-});
-const MESSAGE = JSON.stringify({
-  type: "response_item",
-  timestamp: "2026-01-01T00:00:01Z",
-  payload: { type: "message", role: "user", content: [{ type: "input_text", text: "do it" }] },
-});
-const CALL = JSON.stringify({
-  type: "response_item",
-  payload: { type: "function_call", call_id: "c1", name: "shell", arguments: '{"cmd":"ls"}' },
-});
-const OUTPUT = JSON.stringify({
-  type: "response_item",
-  payload: { type: "function_call_output", call_id: "c1", output: "file.txt" },
-});
-const REASONING = JSON.stringify({
-  type: "response_item",
-  payload: { type: "reasoning", summary: [{ type: "summary_text", text: "hmm" }] },
-});
-
 describe("codexParser", () => {
+  it("parses the whole fixture to the messages expected.json records", () => {
+    const expected = JSON.parse(readFileSync(fixturePath("codex/expected.json"), "utf8"));
+    expect(parseFixture(codexParser, FIXTURE)).toEqual(expected);
+  });
+
   it("reads session id and cwd from session_meta without emitting", () => {
     const c = ctx();
-    expect(codexParser.parse(META, c)).toEqual([]);
+    expect(codexParser.parse(META!, c)).toEqual([]);
     expect(c.sessionId).toBe("cs1");
     expect(c.projectPath).toBe("/proj");
   });
 
   it("parses a message once the session is known", () => {
     const c = ctx();
-    codexParser.parse(META, c);
+    codexParser.parse(META!, c);
     c.lineIndex = 1;
-    const out = codexParser.parse(MESSAGE, c);
+    const out = codexParser.parse(MESSAGE!, c);
     expect(out).toEqual([
       {
         nativeSessionId: "cs1",
@@ -57,11 +47,11 @@ describe("codexParser", () => {
 
   it("gives a function_call and its output distinct record ids", () => {
     const c = ctx();
-    codexParser.parse(META, c);
+    codexParser.parse(META!, c);
     c.lineIndex = 2;
-    const call = codexParser.parse(CALL, c);
+    const call = codexParser.parse(CALL!, c);
     c.lineIndex = 3;
-    const output = codexParser.parse(OUTPUT, c);
+    const output = codexParser.parse(OUTPUT!, c);
     // Both carry call_id "c1"; keying on line index keeps them separate so the
     // output is not deduped away as a copy of the call.
     expect(call[0]!.nativeRecordId).toBe("L2");
@@ -73,25 +63,23 @@ describe("codexParser", () => {
 
   it("maps reasoning summaries", () => {
     const c = ctx();
-    codexParser.parse(META, c);
+    codexParser.parse(META!, c);
     c.lineIndex = 4;
-    const out = codexParser.parse(REASONING, c);
+    const out = codexParser.parse(REASONING!, c);
     expect(out[0]).toMatchObject({ kind: "reasoning", content: "hmm", role: "assistant" });
   });
 
   it("skips event_msg duplicates and turn_context (but reads its cwd)", () => {
     const c = ctx();
-    codexParser.parse(META, c);
-    expect(codexParser.parse(JSON.stringify({ type: "event_msg", payload: { type: "x" } }), c)).toEqual([]);
-    expect(
-      codexParser.parse(JSON.stringify({ type: "turn_context", payload: { cwd: "/proj2" } }), c),
-    ).toEqual([]);
+    codexParser.parse(META!, c);
+    expect(codexParser.parse(EVENT_MSG!, c)).toEqual([]);
+    expect(codexParser.parse(TURN_CONTEXT!, c)).toEqual([]);
     expect(c.projectPath).toBe("/proj2");
   });
 
   it("falls back to the session id in the filename when meta is missing", () => {
     const c = ctx(0);
-    const out = codexParser.parse(MESSAGE, c);
+    const out = codexParser.parse(MESSAGE!, c);
     expect(out[0]!.nativeSessionId).toBe("11111111-2222-3333-4444-555555555555");
   });
 

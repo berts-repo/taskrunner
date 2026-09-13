@@ -1,0 +1,35 @@
+[
+  {
+    "nativeSessionId": "cs1",
+    "nativeRecordId": "L1",
+    "nativeTs": "2026-01-01T00:00:01Z",
+    "projectPath": "/proj",
+    "role": "user",
+    "kind": "message",
+    "content": "do it"
+  },
+  {
+    "nativeSessionId": "cs1",
+    "nativeRecordId": "L2",
+    "projectPath": "/proj",
+    "role": "assistant",
+    "kind": "tool_use",
+    "content": "{\"call_id\":\"c1\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\"}"
+  },
+  {
+    "nativeSessionId": "cs1",
+    "nativeRecordId": "L3",
+    "projectPath": "/proj",
+    "role": "tool",
+    "kind": "tool_result",
+    "content": "{\"call_id\":\"c1\",\"output\":\"file.txt\"}"
+  },
+  {
+    "nativeSessionId": "cs1",
+    "nativeRecordId": "L4",
+    "projectPath": "/proj",
+    "role": "assistant",
+    "kind": "reasoning",
+    "content": "hmm"
+  }
+]

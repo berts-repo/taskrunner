@@ -1,0 +1,46 @@
+[
+  {
+    "nativeSessionId": "s1",
+    "nativeTs": "2026-01-01T00:00:00Z",
+    "projectPath": "/repo",
+    "nativeRecordId": "u1",
+    "role": "user",
+    "kind": "message",
+    "content": "hello there"
+  },
+  {
+    "nativeSessionId": "s1",
+    "nativeTs": "2026-01-01T00:00:01Z",
+    "projectPath": "/repo",
+    "nativeRecordId": "a1#0",
+    "role": "assistant",
+    "kind": "reasoning",
+    "content": "let me think"
+  },
+  {
+    "nativeSessionId": "s1",
+    "nativeTs": "2026-01-01T00:00:01Z",
+    "projectPath": "/repo",
+    "nativeRecordId": "a1#1",
+    "role": "assistant",
+    "kind": "message",
+    "content": "on it"
+  },
+  {
+    "nativeSessionId": "s1",
+    "nativeTs": "2026-01-01T00:00:01Z",
+    "projectPath": "/repo",
+    "nativeRecordId": "a1#2",
+    "role": "assistant",
+    "kind": "tool_use",
+    "content": "{\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}"
+  },
+  {
+    "nativeSessionId": "s1",
+    "projectPath": "/repo",
+    "nativeRecordId": "u2#0",
+    "role": "tool",
+    "kind": "tool_result",
+    "content": "{\"tool_use_id\":\"t1\",\"is_error\":false,\"content\":\"file.txt\"}"
+  }
+]

@@ -1,0 +1,10 @@
+{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/repo","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hello there"}}
+{"type":"assistant","uuid":"a1","sessionId":"s1","cwd":"/repo","timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"let me think","signature":"sig"},{"type":"text","text":"on it"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","uuid":"u2","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file.txt","is_error":false}]}}
+{"type":"queue-operation","operation":"enqueue"}
+{"type":"file-history-snapshot"}
+{"type":"attachment","uuid":"x"}
+{"type":"some-future-type","uuid":"y","sessionId":"s1"}
+{"type":"assistant","uuid":"a2","sessionId":"s1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"s"}]}}
+not json at all
+

@@ -1,10 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WorkspaceProvider } from "../src/daemon/scheduler.js";
+import type { FileContext, ParsedMessage, TranscriptParser } from "../src/ingest/parser.js";
 import type { EventBody, LogEvent } from "../src/storage/events.js";
 import type { TurnRequest, TurnResult, WorkerHarness } from "../src/workers/harness.js";
 import type { RunningWorker, WorkerRunner, WorkerSpawnSpec } from "../src/workers/runner.js";
@@ -168,4 +169,30 @@ export function sampleSequence(): LogEvent[] {
     }),
     evt({ type: "session.ended", session_id: "sess_a" }),
   ];
+}
+
+/** Absolute path of a file under tests/fixtures. */
+export function fixturePath(relative: string): string {
+  return join(import.meta.dirname, "fixtures", relative);
+}
+
+/** The lines of a fixture transcript, in file order (a trailing newline is not a line). */
+export function fixtureLines(relative: string): string[] {
+  const text = readFileSync(fixturePath(relative), "utf8");
+  return text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
+}
+
+/**
+ * Parses a whole fixture the way the sweeper does — one context per file,
+ * line index advancing per line — so the result can be compared to the
+ * `expected.json` next to it, which the Rust port's tests read too.
+ */
+export function parseFixture(parser: TranscriptParser, relative: string): ParsedMessage[] {
+  const ctx: FileContext = { filePath: fixturePath(relative), lineIndex: 0 };
+  const out: ParsedMessage[] = [];
+  fixtureLines(relative).forEach((line, lineIndex) => {
+    ctx.lineIndex = lineIndex;
+    out.push(...parser.parse(line, ctx));
+  });
+  return out;
 }
