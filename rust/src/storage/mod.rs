@@ -10,6 +10,6 @@ use events::{EventBody, LogEvent};
 
 /// The single durable write path: append to the log, fold into the index.
 /// The daemon implements it; tests implement it over an in-memory stack.
-pub trait Recorder {
+pub trait Recorder: Send + Sync {
     fn record(&self, body: EventBody) -> anyhow::Result<LogEvent>;
 }

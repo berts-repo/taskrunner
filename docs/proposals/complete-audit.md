@@ -484,6 +484,12 @@ internal, not frozen.
    and run with `node` (a test-only dependency). *Check:* those, plus a new
    env-gated `TASKRUNNER_LIVE_DOCKER=1` test that runs `echo` in a worker image
    behind the real proxy — the runner has no automated exercise today.
+   **Done 2026-09-13.** The fake workers moved to `tests/fixtures/fake-*.cjs`
+   first (a TypeScript PR). 21 tests plus the live Docker test, which is
+   written but unverified: Docker was inactive on the author's machine, so it
+   runs the first time Docker is up. The harnesses share one process driver
+   (`harness::drive`): read stdout line by line, keep a stderr tail, kill on
+   cancel, report the exit.
 6. **Scheduler.** Assign/continue/cancel, `wait`, one running turn per task,
    timeouts, tiers and approvals, worker-session and artifact events, `afterTurn`;
    wired into the daemon's `stop()`. *Check:* the 14 scheduler cases, `integration`

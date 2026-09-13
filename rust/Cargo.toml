@@ -38,9 +38,12 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 nix = { version = "0.30", features = ["signal", "process"] }
+async-trait = "0.1"
 
 [dev-dependencies]
+async-trait = "0.1"
 insta = "1"
 nix = { version = "0.30", features = ["signal", "process"] }
 rmcp = { version = "3", features = ["transport-child-process"] }
 tempfile = "3"
+tokio-util = "0.7"

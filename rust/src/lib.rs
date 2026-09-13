@@ -13,3 +13,5 @@ pub mod paths;
 pub mod shim;
 pub mod storage;
 pub mod view;
+pub mod workers;
+pub mod workspace;

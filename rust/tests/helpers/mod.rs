@@ -113,3 +113,94 @@ pub fn message(
         project_path: None,
     }
 }
+
+// ---- worker test seams ----------------------------------------------------
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+use async_trait::async_trait;
+use taskrunner::domain::errors::{ErrorCode, ToolError};
+use taskrunner::workers::runner::{RunnerKind, RunningWorker, WorkerRunner, WorkerSpawnSpec};
+
+/// Absolute path of a file under the repository's tests/fixtures, which the
+/// TypeScript tests share.
+pub fn fixture_path(relative: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures").join(relative)
+}
+
+/// The scripted stand-ins for the codex and claude CLIs (Node scripts).
+pub fn fake_codex() -> PathBuf {
+    fixture_path("fake-codex.cjs")
+}
+
+pub fn fake_claude() -> PathBuf {
+    fixture_path("fake-claude.cjs")
+}
+
+/// Throwaway git repo with one committed README, for clone-workspace tests.
+pub fn init_git_repo() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+    std::fs::write(repo.path().join("README.md"), "hi\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "init"]);
+    repo
+}
+
+/// Spawns the worker argv directly in the workspace: the no-Docker test runner.
+pub struct LocalRunner {
+    pub workspace: PathBuf,
+    /// Overrides argv[0], e.g. a fake codex binary path.
+    pub command: Option<PathBuf>,
+}
+
+impl LocalRunner {
+    pub fn new(workspace: &Path, command: Option<&Path>) -> LocalRunner {
+        LocalRunner { workspace: workspace.to_path_buf(), command: command.map(Path::to_path_buf) }
+    }
+}
+
+#[async_trait]
+impl WorkerRunner for LocalRunner {
+    fn kind(&self) -> RunnerKind {
+        RunnerKind::Host
+    }
+
+    fn workspace_path(&self) -> &str {
+        self.workspace.to_str().unwrap()
+    }
+
+    async fn start(&self, spec: WorkerSpawnSpec) -> Result<RunningWorker, ToolError> {
+        let (logical, rest) = spec.argv.split_first().expect("argv has a command");
+        let program = self.command.clone().unwrap_or_else(|| PathBuf::from(logical));
+        let child = tokio::process::Command::new(&program)
+            .args(rest)
+            .current_dir(&self.workspace)
+            .envs(&spec.env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| {
+                ToolError::new(
+                    ErrorCode::WorkerFailed,
+                    format!("failed to start {} worker: {err}", logical),
+                )
+            })?;
+        Ok(RunningWorker::new(child))
+    }
+
+    async fn dispose(&self) {}
+}
