@@ -168,6 +168,70 @@ prunes too, nothing remembers. When shrinking is needed:
   event naming what was removed and why, so the archive records its own gap.
 - Never silent, never age-based by default.
 
+## Rust port — before the redesign
+
+Decided 2026-09-13: taskrunner moves to Rust, and the port happens *before* the
+redesign above. Reason: the redesign is additive around a core that survives — log
+and index, scheduler, runner, harnesses, parsers, MCP tools, CLI all stay; only the
+egress proxy is replaced and the rest is new. Porting the core first means the new
+pieces are written once, in the final language, on a floor already proven equal to
+today's system. Rust is also the stronger tool for the hardest new piece (the
+TLS-terminating proxy: `rustls`, `hyper`, `rcgen`), and it ships as one binary — the
+"download one file" install a non-technical user needs.
+
+**Port means the same program.** Same commands, same files on disk, same behaviour.
+Not better, not redesigned. That is what makes it checkable.
+
+### Frozen during the port
+
+- `~/.taskrunner/events.jsonl` — the existing archive must load unchanged.
+- `config.toml` — same keys, same defaults.
+- MCP tool names and arguments; CLI commands and output.
+- Test fixtures (sample Claude/Codex transcripts) — reused as-is.
+- Docker images — they run `claude`/`codex`, not taskrunner. Untouched.
+
+### Order — bottom up, each layer green before the next
+
+1. **Storage.** Read the log, fold the index, rebuild from scratch. *Check:* the
+   SQLite the Rust build produces from the real `events.jsonl` matches the
+   TypeScript one row for row. This single test proves most of the port.
+2. **Ingest.** Claude and Codex parsers. *Check:* same fixtures in, same events out.
+3. **Config and paths.**
+4. **Daemon and socket.**
+5. **Workers.** Docker runner, existing proxy sidecar (unchanged), Claude and Codex
+   harnesses. *Check:* the existing container integration tests.
+6. **Scheduler.** Tasks, turns, timeouts, cancel.
+7. **MCP server and CLI.** *Check:* register the Rust binary with Claude Code in
+   place of the Node one; nothing is missing.
+
+One module, one PR, tests green per step. The old proxy is *not* ported — it is
+replaced in the redesign.
+
+### Crates
+
+| Need | Crate |
+|---|---|
+| JSONL, config | `serde`, `serde_json`, `toml` |
+| SQLite + FTS5 | `rusqlite` (bundled) |
+| Async, socket, process spawn | `tokio` |
+| MCP | `rmcp` (official Rust SDK) |
+| CLI | `clap` |
+| Ids | `ulid` |
+| Tests | `cargo test`; `insta` for snapshots |
+
+### Done when
+
+`cargo test` is green; the Rust index built from the real log equals the TypeScript
+one; the Rust binary has been the daily driver long enough to trust. Then the
+TypeScript is deleted — not kept alongside — and the redesign begins.
+
+### Cost, honestly
+
+~6.5k lines of source and ~4k of tests, mostly mechanical. Writing Rust is slower at
+first (borrow checker, async, 10–60 s compiles vs instant `tsx`); building and
+testing are simpler (`cargo build`, `cargo test`, one binary). Storage is the step
+that takes longest and teaches most.
+
 ## How the work is done
 
 Clean and readable is a goal of the redesign, not a nicety after it.
@@ -205,6 +269,10 @@ Clean and readable is a goal of the redesign, not a nicety after it.
   problem with worker turns; worth copying.
 
 ## Not doing
+
+- Redesigning and porting at the same time. Port the core first (see above), then
+  build the new pieces in Rust only.
+- Porting the egress proxy. It is replaced, not carried over.
 
 - A per-harness "ingest off" switch. Replaced by the one-archive decision above.
 - Host wire capture or Docker-hosted sessions as defaults. Both are opt-in.
