@@ -10,6 +10,7 @@
 mod http;
 mod lock;
 pub mod mcp;
+pub mod scheduler;
 mod sweep_gate;
 
 use std::fs;
@@ -25,11 +26,54 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 pub use lock::{AlreadyRunning, is_process_alive, read_pid};
+
+/// The Docker runner for a turn. Mounts only the worker's own auth material,
+/// never broad host state; mounts and image fallbacks key on the harness
+/// kind, so config-only workers inherit their loop's layout. A missing image
+/// surfaces from the runner's preflight at start time, so harnesses that
+/// never spawn a process (tests) are unaffected. Every egress decision the
+/// proxy makes is recorded against the turn.
+fn docker_runner_factory(config: Arc<Config>, store: SharedStore) -> Arc<MakeRunner> {
+    Arc::new(move |ctx: RunnerContext| -> Box<dyn WorkerRunner> {
+        let cfg = worker_config(&config, &ctx.worker);
+        let kind = worker_kind(&config, &ctx.worker);
+        let store = store.clone();
+        let (task_id, turn_id) = (ctx.task_id.clone(), ctx.turn_id.clone());
+        Box::new(DockerRunner::new(DockerRunnerOptions {
+            workspace_dir: ctx.workspace_dir,
+            scope_id: ctx.turn_id,
+            image: cfg
+                .image
+                .or_else(|| kind.map(|k| default_image(k).to_string()))
+                .unwrap_or_default(),
+            auth_volume: cfg.auth_volume,
+            auth_mounts: kind.map(auth_mounts).unwrap_or_default(),
+            proxy_image: config.egress.proxy_image.clone(),
+            allowed_domains: ctx.allowed_domains,
+            limits: cfg.limits,
+            on_egress: Some(Arc::new(move |decision| {
+                let mut payload =
+                    serde_json::json!({ "host": decision.host, "port": decision.port });
+                if let Some(reason) = decision.reason {
+                    payload["reason"] = serde_json::Value::String(reason);
+                }
+                let _ = store.record(EventBody::AuditRecorded {
+                    session_id: None,
+                    task_id: Some(task_id.clone()),
+                    turn_id: Some(turn_id.clone()),
+                    kind: if decision.allowed { "egress.allowed" } else { "egress.refused" }.into(),
+                    payload,
+                });
+            })),
+            docker_command: "docker".into(),
+        }))
+    })
+}
 use mcp::{McpService, SessionRecord, build_instructions};
 use sweep_gate::SweepGate;
 
-use crate::config::{Config, load_config};
-use crate::harnesses::ingest_sources;
+use crate::config::{Config, load_config, worker_config};
+use crate::harnesses::{auth_mounts, build_harnesses, default_image, ingest_sources, worker_kind};
 use crate::ingest::sweep::{IngestSource, SweepStats, SweeperDeps, TranscriptSweeper};
 use crate::ingest::volume::{docker_copy_out, reap_copy_out_containers};
 use crate::paths::StatePaths;
@@ -38,6 +82,11 @@ use crate::storage::artifacts::ArtifactStore;
 use crate::storage::events::{EventBody, EventLog, read_events};
 use crate::storage::index::rebuild_index;
 use crate::storage::store::SharedStore;
+use crate::workers::harness::WorkerHarness;
+use crate::workers::runner::{DockerRunner, DockerRunnerOptions, WorkerRunner};
+use crate::workspace::clone::{CloneWorkspaces, WorkspaceProvider};
+use scheduler::{MakeRunner, RunnerContext, Scheduler, SchedulerDeps};
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct DaemonOptions {
@@ -45,6 +94,11 @@ pub struct DaemonOptions {
     /// empty list to keep the startup sweep from touching real host
     /// transcript directories.
     pub ingest_sources: Option<Vec<IngestSource>>,
+    /// Configured worker harnesses; tests may inject a fake.
+    pub harnesses: Option<HashMap<String, Arc<dyn WorkerHarness>>>,
+    pub workspaces: Option<Arc<dyn WorkspaceProvider>>,
+    /// Test seam: replaces the Docker runner factory.
+    pub make_runner: Option<Arc<MakeRunner>>,
 }
 
 /// A handle on the running daemon. Clones share it; `stop` takes one down.
@@ -54,6 +108,7 @@ pub struct Daemon {
     pub config: Arc<Config>,
     pub store: SharedStore,
     pub artifacts: Arc<ArtifactStore>,
+    pub scheduler: Scheduler,
     sweeps: SweepGate,
     sessions: Arc<AtomicUsize>,
     shutdown: CancellationToken,
@@ -107,11 +162,32 @@ impl Daemon {
             })),
             on_log: None,
         });
+        let config = Arc::new(config);
+        // Turns run in self-contained clones the container can mount safely.
+        let workspaces = options.workspaces.unwrap_or_else(|| {
+            Arc::new(CloneWorkspaces::new(
+                &paths.workspaces_dir,
+                artifacts.clone(),
+                Arc::new(store.clone()),
+            ))
+        });
+        let make_runner = options
+            .make_runner
+            .unwrap_or_else(|| docker_runner_factory(config.clone(), store.clone()));
+        let scheduler = Scheduler::new(SchedulerDeps {
+            config: config.clone(),
+            store: store.clone(),
+            harnesses: options.harnesses.unwrap_or_else(|| build_harnesses(&config)),
+            workspaces,
+            make_runner,
+            artifacts: artifacts.clone(),
+        });
         let daemon = Daemon {
             paths: Arc::new(paths),
-            config: Arc::new(config),
+            config,
             store,
             artifacts,
+            scheduler,
             sweeps: SweepGate::new(sweeper),
             sessions: Arc::new(AtomicUsize::new(0)),
             shutdown: CancellationToken::new(),
@@ -253,6 +329,8 @@ impl Daemon {
         // the log closes.
         self.shutdown.cancel();
         self.sweeps.settle().await;
+        // Cancel running turns so their terminal events land in the log too.
+        self.scheduler.shutdown().await;
         let mut tasks = self.tasks.lock().await;
         while tasks.join_next().await.is_some() {}
         let _ = fs::remove_file(&self.paths.socket_path);

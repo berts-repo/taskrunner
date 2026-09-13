@@ -204,3 +204,93 @@ impl WorkerRunner for LocalRunner {
 
     async fn dispose(&self) {}
 }
+
+// ---- scheduler test seams -------------------------------------------------
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use taskrunner::workers::harness::{TurnRequest, TurnResult, WorkerEvent, WorkerHarness};
+use taskrunner::workspace::clone::WorkspaceProvider;
+
+/// Runs workers directly in the project root: no clone, no isolation.
+pub struct ProjectRootWorkspaces;
+
+impl WorkspaceProvider for ProjectRootWorkspaces {
+    fn ensure_workspace(&self, _task_id: &str, project_root: &Path) -> Result<PathBuf, ToolError> {
+        Ok(project_root.to_path_buf())
+    }
+    fn collect_changes(&self, _workspace_dir: &Path) -> Vec<String> {
+        vec![]
+    }
+    fn after_turn(
+        &self,
+        _task_id: &str,
+        _turn_id: &str,
+        _workspace_dir: &Path,
+        _project_root: &Path,
+    ) {
+    }
+}
+
+/// Scripted in-process harness for tests. Behavior is driven by directives in
+/// the prompt: `sleep:<ms>` delays (abortably), `fail` fails. Native session
+/// ids are `fake-<n>` and each resumed turn increments a per-session counter
+/// so continuation is observable.
+#[derive(Default)]
+pub struct FakeHarness {
+    next_session: AtomicU32,
+    turn_counts: Mutex<std::collections::HashMap<String, u32>>,
+}
+
+#[async_trait]
+impl WorkerHarness for FakeHarness {
+    fn name(&self) -> &str {
+        "fake"
+    }
+
+    async fn run_turn(&self, request: TurnRequest<'_>) -> Result<TurnResult, ToolError> {
+        (request.on_event)(WorkerEvent {
+            kind: "agent_message".into(),
+            payload: serde_json::json!({ "text": "fake worker starting" }),
+        });
+
+        if let Some(ms) = request
+            .prompt
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("sleep:"))
+            .and_then(|n| n.parse::<u64>().ok())
+        {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(ms)) => {}
+                _ = request.cancel.cancelled() => {}
+            }
+        }
+        if request.cancel.is_cancelled() {
+            return Err(ToolError::new(ErrorCode::WorkerFailed, "fake worker aborted"));
+        }
+        if request.prompt.contains("fail") {
+            return Err(ToolError::new(ErrorCode::WorkerFailed, "fake worker failure"));
+        }
+
+        let session_id = request.native_session_id.clone().unwrap_or_else(|| {
+            format!("fake-{}", self.next_session.fetch_add(1, Ordering::Relaxed) + 1)
+        });
+        let turn = {
+            let mut counts = self.turn_counts.lock().unwrap();
+            let n = counts.entry(session_id.clone()).or_insert(0);
+            *n += 1;
+            *n
+        };
+        (request.on_event)(WorkerEvent {
+            kind: "command_execution".into(),
+            payload: serde_json::json!({ "command": "true" }),
+        });
+        Ok(TurnResult {
+            response: format!("echo: {} (session {session_id}, turn {turn})", request.prompt),
+            native_session_id: Some(session_id),
+            changed_files: vec![],
+            usage: None,
+        })
+    }
+}

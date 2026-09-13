@@ -3,12 +3,17 @@
 //! paths are capped around 104 bytes.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
+
+#[path = "../helpers/mod.rs"]
+mod helpers;
 
 use rmcp::ServiceExt;
 use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
 use serde_json::{Value, json};
 use taskrunner::client;
+use taskrunner::daemon::scheduler::AssignArgs;
 use taskrunner::daemon::{AlreadyRunning, Daemon, DaemonOptions};
 use taskrunner::paths::{StatePaths, state_paths};
 use taskrunner::storage::events::{EventBody, EventLog, read_events};
@@ -22,7 +27,12 @@ fn short_root() -> (tempfile::TempDir, StatePaths) {
 
 /// Default off: tests must never sweep the developer's real host transcripts.
 async fn start(paths: &StatePaths) -> Daemon {
-    Daemon::start(paths.clone(), DaemonOptions { ingest_sources: Some(vec![]) }).await.unwrap()
+    Daemon::start(
+        paths.clone(),
+        DaemonOptions { ingest_sources: Some(vec![]), ..Default::default() },
+    )
+    .await
+    .unwrap()
 }
 
 async fn get(paths: &StatePaths, path: &str) -> client::Response {
@@ -90,7 +100,11 @@ async fn serves_read_only_query_routes_over_the_socket() {
 async fn refuses_a_second_daemon_on_the_same_state_root() {
     let (_dir, paths) = short_root();
     let first = start(&paths).await;
-    let second = Daemon::start(paths.clone(), DaemonOptions { ingest_sources: Some(vec![]) }).await;
+    let second = Daemon::start(
+        paths.clone(),
+        DaemonOptions { ingest_sources: Some(vec![]), ..Default::default() },
+    )
+    .await;
     let Err(err) = second else { panic!("second daemon started") };
     assert!(err.is::<AlreadyRunning>());
     first.stop().await;
@@ -204,6 +218,54 @@ async fn wait_for<T>(mut probe: impl FnMut() -> Option<T>) -> T {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("condition not met within 5s");
+}
+
+#[tokio::test]
+async fn runs_a_worker_that_exists_only_in_config_end_to_end() {
+    // The pluggability acceptance test: no injected harnesses, no code that
+    // knows this worker's name — just a [worker.<name>] config section. Only
+    // the runner factory is stubbed so the fake codex binary runs sans Docker.
+    let (_dir, paths) = short_root();
+    std::fs::create_dir_all(&paths.root).unwrap();
+    std::fs::write(&paths.config_file, "[worker.configling]\nharness = \"codex\"\n").unwrap();
+    let repo = helpers::init_git_repo();
+
+    let daemon = Daemon::start(
+        paths.clone(),
+        DaemonOptions {
+            ingest_sources: Some(vec![]),
+            make_runner: Some(Arc::new(|ctx| {
+                Box::new(helpers::LocalRunner::new(
+                    &ctx.workspace_dir,
+                    Some(&helpers::fake_codex()),
+                ))
+            })),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let assigned = daemon
+        .scheduler
+        .assign_task(AssignArgs {
+            project: repo.path().to_string_lossy().into_owned(),
+            worker: "configling".into(),
+            prompt: "create hello".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(assigned.tier.as_deref(), Some("workspace-write"));
+    let status = wait_for(|| {
+        let status = daemon.scheduler.outcome(&assigned.task_id).unwrap().status;
+        (status != "running" && status != "created").then_some(status)
+    })
+    .await;
+    assert_eq!(status, "completed");
+    let done = daemon.scheduler.outcome(&assigned.task_id).unwrap();
+    assert!(done.summary.as_deref().unwrap().contains("create hello"));
+    assert_eq!(done.changed_files, vec!["hello.txt"]);
+    daemon.stop().await;
 }
 
 // ---- the stdio shim ------------------------------------------------------

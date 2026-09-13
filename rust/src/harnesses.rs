@@ -2,10 +2,14 @@
 //! rather than on a worker's name, so config-only workers inherit their loop's
 //! layout. Adding a harness is one row in each table here.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::config::{Config, HarnessKind, worker_config};
 use crate::ingest::sweep::IngestSource;
+use crate::workers::claude::{ClaudeHarness, ClaudeHarnessOptions};
+use crate::workers::codex::{CodexHarness, CodexHarnessOptions};
+use crate::workers::harness::WorkerHarness;
 
 /// One mount of (a subpath of) the worker's auth volume into its container.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +36,27 @@ pub fn worker_names(config: &Config) -> Vec<String> {
         .chain(config.worker.keys().cloned())
         .filter(|name| seen.insert(name.clone()))
         .collect()
+}
+
+/// One harness instance per configured worker, driven purely by config. A
+/// worker whose kind names no harness code is left out.
+pub fn build_harnesses(config: &Config) -> HashMap<String, Arc<dyn WorkerHarness>> {
+    let mut harnesses: HashMap<String, Arc<dyn WorkerHarness>> = HashMap::new();
+    for name in worker_names(config) {
+        let cfg = worker_config(config, &name);
+        let harness: Arc<dyn WorkerHarness> = match worker_kind(config, &name) {
+            Some(HarnessKind::Codex) => Arc::new(CodexHarness::new(CodexHarnessOptions {
+                model: cfg.model,
+                provider: cfg.provider,
+            })),
+            Some(HarnessKind::Claude) => {
+                Arc::new(ClaudeHarness::new(ClaudeHarnessOptions { model: cfg.model }))
+            }
+            None => continue,
+        };
+        harnesses.insert(name, harness);
+    }
+    harnesses
 }
 
 /// Container mounts for each harness kind's auth material.

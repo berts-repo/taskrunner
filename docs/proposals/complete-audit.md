@@ -494,7 +494,13 @@ internal, not frozen.
    timeouts, tiers and approvals, worker-session and artifact events, `afterTurn`;
    wired into the daemon's `stop()`. *Check:* the 14 scheduler cases, `integration`
    (fake codex + clone workspaces), daemon's config-only worker, and one manual
-   `TASKRUNNER_LIVE_CODEX=1` run.
+   `TASKRUNNER_LIVE_CODEX=1` run. **Done 2026-09-13** except the live run,
+   which waits for Docker. 16 tests: the 14 scheduler cases, the integration
+   test (which also renders lookup-task through the real stack, closing the
+   step-1b note), and the daemon's config-only worker. `resolve_project` now
+   takes the locked store so a lookup and a create happen under one lock —
+   two concurrent tasks resolving a new project could otherwise both create
+   it, something the single-threaded TypeScript never had to guard.
 7. **MCP server and CLI** — two PRs. *7a* the six tools, the `tool.<name>` audit
    wrapper, `buildInstructions` verbatim; `tools` test. *Check:* `initialize` +
    `tools/list` through both shims, JSON diffed — names and argument names must
