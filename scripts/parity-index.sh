@@ -12,7 +12,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 npx --prefix "$here" tsx "$here/scripts/debug-refold.ts" "$log" "$work/ts.db" >/dev/null
-(cd "$here/rust" && cargo run -q --example refold -- "$log" "$work/rs.db")
+(cd "$here/rust" && cargo run -q --example refold -- "$log" "$work/rs.db" >/dev/null)
 
 # One JSON line per row, ordered by every column so the dump is deterministic.
 # FTS5 shadow tables (messages_fts_*) are internal to the SQLite build and are

@@ -417,7 +417,10 @@ internal, not frozen.
    JS prints `1.0` as `1`. *1b* `domain/{tasks,projects,policy}`,
    `view/{transcript,render}`, `lookup`. Tests `outline`, `timeline`, `transcript`,
    `lookup`, `policy` ported as-is — they already assert exact strings and *are* the
-   golden master; `insta` is for new tests only.
+   golden master; `insta` is for new tests only. **1a done 2026-09-13**: parity on
+   the corpus is empty (2,411 messages, every table); 26 tests; the JS-vs-Rust
+   traps above were handled in `facts.rs` (JS whitespace class, UTF-16 slicing,
+   number printing) and none showed in the diff.
 2. **Ingest.** First a TypeScript PR that moves the inline sample lines into
    `tests/fixtures/{claude-code,codex}/*.jsonl` (no behaviour change). Then
    `ingest/{parser,claude_code,codex,registry,sweep,volume}`. The sweep runs on
