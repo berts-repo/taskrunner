@@ -2,6 +2,7 @@
 
 pub mod domain;
 pub mod ids;
+pub mod ingest;
 pub mod js;
 pub mod storage;
 pub mod view;

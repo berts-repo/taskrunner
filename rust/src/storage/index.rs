@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, ToSql, params};
 
 use super::events::{EventBody, LogEvent};
 use super::facts::message_facts;
@@ -196,33 +196,32 @@ impl StateIndex {
     }
 
     pub fn apply(&self, event: &LogEvent) -> rusqlite::Result<()> {
-        let db = &self.db;
         let ts = &event.ts;
         match &event.body {
             EventBody::ProjectCreated { project_id, root } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO projects (id, root, created_at) VALUES (?, ?, ?)",
                     params![project_id, root, ts],
                 )?;
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO project_aliases (path, project_id) VALUES (?, ?)",
                     params![root, project_id],
                 )?;
             }
             EventBody::ProjectAliasAdded { project_id, path } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO project_aliases (path, project_id) VALUES (?, ?)",
                     params![path, project_id],
                 )?;
             }
             EventBody::SessionStarted { session_id, project_id, client } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO mcp_sessions (id, project_id, client, started_at) VALUES (?, ?, ?, ?)",
                     params![session_id, project_id, client, ts],
                 )?;
             }
             EventBody::SessionEnded { session_id } => {
-                db.execute(
+                self.exec(
                     "UPDATE mcp_sessions SET ended_at = ? WHERE id = ?",
                     params![ts, session_id],
                 )?;
@@ -237,7 +236,7 @@ impl StateIndex {
                 allow_domains,
                 ..
             } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO tasks
                        (id, project_id, session_id, worker, prompt_summary, status,
                         tier, allow_domains, created_at, updated_at)
@@ -266,7 +265,7 @@ impl StateIndex {
                 domains,
                 session_id,
             } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO approvals (id, task_id, decision, via, domains, session_id, ts)
                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                     params![
@@ -274,18 +273,18 @@ impl StateIndex {
                         domains.as_ref().map(json_text), session_id, ts
                     ],
                 )?;
-                db.execute(
+                self.exec(
                     "UPDATE tasks SET approval_state = ?, updated_at = ? WHERE id = ?",
                     params![decision.as_str(), ts, task_id],
                 )?;
             }
             EventBody::TurnStarted { turn_id, task_id, prompt } => {
-                let idx: i64 = db.query_row(
+                let idx: i64 = self.query(
                     "SELECT COUNT(*) FROM turns WHERE task_id = ?",
-                    [task_id],
+                    &[task_id],
                     |row| row.get(0),
                 )?;
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO turns (id, task_id, idx, prompt, status, started_at)
                      VALUES (?, ?, ?, ?, 'running', ?)",
                     params![turn_id, task_id, idx, prompt, ts],
@@ -293,7 +292,7 @@ impl StateIndex {
                 self.set_task_status(task_id, "running", ts)?;
             }
             EventBody::TurnCompleted { turn_id, task_id, response, changed_files, .. } => {
-                db.execute(
+                self.exec(
                     "UPDATE turns SET response = ?, changed_files = ?, status = 'completed', completed_at = ?
                      WHERE id = ?",
                     params![response, json_text(changed_files), ts, turn_id],
@@ -301,7 +300,7 @@ impl StateIndex {
                 self.set_task_status(task_id, "completed", ts)?;
             }
             EventBody::TurnFailed { turn_id, task_id, error_code, error_message } => {
-                db.execute(
+                self.exec(
                     "UPDATE turns SET status = 'failed', error_code = ?, error_message = ?, completed_at = ?
                      WHERE id = ?",
                     params![error_code, error_message, ts, turn_id],
@@ -309,7 +308,7 @@ impl StateIndex {
                 self.set_task_status(task_id, "failed", ts)?;
             }
             EventBody::TurnCanceled { turn_id, task_id, reason } => {
-                db.execute(
+                self.exec(
                     "UPDATE turns SET status = 'canceled', error_message = ?, completed_at = ?
                      WHERE id = ?",
                     params![reason, ts, turn_id],
@@ -323,7 +322,7 @@ impl StateIndex {
                 native_session_id,
                 turn_id,
             } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO worker_sessions
                        (id, task_id, worker, native_session_id, turn_id, recorded_at)
                      VALUES (?, ?, ?, ?, ?, ?)",
@@ -332,7 +331,7 @@ impl StateIndex {
             }
             EventBody::MessageRecorded { .. } => self.apply_message(event)?,
             EventBody::AuditRecorded { session_id, task_id, turn_id, kind, payload } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO audit_events (id, session_id, task_id, turn_id, kind, payload, ts)
                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                     params![event.id, session_id, task_id, turn_id, kind, json_text(payload), ts],
@@ -347,7 +346,7 @@ impl StateIndex {
                 sha256,
                 locator,
             } => {
-                db.execute(
+                self.exec(
                     "INSERT OR IGNORE INTO artifacts
                        (id, kind, label, media_type, size_bytes, sha256, locator, created_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -370,7 +369,7 @@ impl StateIndex {
                 turn_id,
                 audit_event_id,
             } => {
-                db.execute(
+                self.exec(
                     "INSERT INTO artifact_links (artifact_id, session_id, task_id, turn_id, audit_event_id)
                      SELECT ?, ?, ?, ?, ?
                      WHERE NOT EXISTS (
@@ -406,7 +405,6 @@ impl StateIndex {
         else {
             return Ok(());
         };
-        let db = &self.db;
         let session_key = format!("{source}/{native_session_id}");
         let facts = message_facts(role, kind, content);
 
@@ -415,10 +413,10 @@ impl StateIndex {
         // everything before the first prompt (a session's harness preamble)
         // stays at 0. Read before the insert, committed only if the insert
         // actually added a row, so a re-swept duplicate never advances it.
-        let prior: Option<i64> = db
-            .query_row(
+        let prior: Option<i64> = self
+            .query(
                 "SELECT prompt_count FROM transcript_sessions WHERE id = ?",
-                [&session_key],
+                &[&session_key],
                 |row| row.get(0),
             )
             .optional()?;
@@ -428,7 +426,7 @@ impl StateIndex {
         // re-emits the event; INSERT OR IGNORE keeps `messages` idempotent.
         // FTS5 has no such guard, so only index when a row was actually added —
         // otherwise a rebuild would double-index every re-swept message.
-        let inserted = db.execute(
+        let inserted = self.exec(
             "INSERT OR IGNORE INTO messages
                (id, source, native_session_id, native_record_id, role, kind,
                 content, native_ts, project_path, recorded_at,
@@ -456,7 +454,7 @@ impl StateIndex {
         if inserted == 0 {
             return Ok(());
         }
-        db.execute(
+        self.exec(
             "INSERT INTO messages_fts
                (content, message_id, source, native_session_id, role, kind, native_ts)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -466,7 +464,7 @@ impl StateIndex {
         // message never double-counts. MIN/MAX are wrapped in COALESCE because
         // SQLite's scalar min()/max() return NULL if any argument is NULL, and
         // native_ts is optional.
-        db.execute(
+        self.exec(
             "INSERT INTO transcript_sessions
                (id, source, native_session_id, project_path, first_ts, last_ts,
                 first_recorded_at, last_recorded_at, message_count, prompt_count)
@@ -505,26 +503,41 @@ impl StateIndex {
         native_ts: Option<&str>,
     ) -> rusqlite::Result<Option<String>> {
         let Some(native_ts) = native_ts else { return Ok(None) };
-        self.db
-            .query_row(
-                "SELECT t.id FROM worker_sessions ws
-                   JOIN turns t ON t.task_id = ws.task_id
-                  WHERE ws.native_session_id = ?
-                    AND t.started_at <= ?
-                    AND (t.completed_at IS NULL OR t.completed_at >= ?)
-                  ORDER BY t.started_at LIMIT 1",
-                params![native_session_id, native_ts, native_ts],
-                |row| row.get(0),
-            )
-            .optional()
+        self.query(
+            "SELECT t.id FROM worker_sessions ws
+               JOIN turns t ON t.task_id = ws.task_id
+              WHERE ws.native_session_id = ?
+                AND t.started_at <= ?
+                AND (t.completed_at IS NULL OR t.completed_at >= ?)
+              ORDER BY t.started_at LIMIT 1",
+            params![native_session_id, native_ts, native_ts],
+            |row| row.get(0),
+        )
+        .optional()
     }
 
     fn set_task_status(&self, task_id: &str, status: &str, ts: &str) -> rusqlite::Result<()> {
-        self.db.execute(
+        self.exec(
             "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
             params![status, ts, task_id],
         )?;
         Ok(())
+    }
+
+    // Statements are prepared once and reused: a backfill folds thousands of
+    // events, and parsing the SQL every time dominated the fold.
+
+    fn exec(&self, sql: &str, params: &[&dyn ToSql]) -> rusqlite::Result<usize> {
+        self.db.prepare_cached(sql)?.execute(params)
+    }
+
+    fn query<T>(
+        &self,
+        sql: &str,
+        params: &[&dyn ToSql],
+        read: impl FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
+        self.db.prepare_cached(sql)?.query_row(params, read)
     }
 }
 

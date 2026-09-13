@@ -39,6 +39,10 @@ pub fn trim_end(text: &str) -> &str {
     text.trim_end_matches(is_whitespace)
 }
 
+pub fn trim(text: &str) -> &str {
+    text.trim_matches(is_whitespace)
+}
+
 /// `text.replace(/\s+/g, " ").trim()`.
 pub fn collapse_whitespace(text: &str) -> String {
     text.split(is_whitespace).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
@@ -59,6 +63,11 @@ pub fn slice_to(text: &str, max: usize) -> String {
 pub fn pad_end(text: &str, width: usize) -> String {
     let missing = width.saturating_sub(len(text));
     format!("{text}{}", " ".repeat(missing))
+}
+
+/// `Array.prototype.sort()` on strings: UTF-16 code unit order.
+pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
+    a.encode_utf16().cmp(b.encode_utf16())
 }
 
 /// `String(n)`: integers print without a fraction.

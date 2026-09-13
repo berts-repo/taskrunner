@@ -437,7 +437,14 @@ internal, not frozen.
    `save_state()` stays. *Check:* parser tests (fixtures in, same messages out), the
    11 sweep cases, `volume`; and a fresh Rust sweep of the same host directories
    refolded and diffed against the corpus with ids and `*_recorded_at` projected
-   out.
+   out. **Done 2026-09-13.** The fixture PR also wrote an `expected.json` per
+   fixture (by the TypeScript parser) that both languages' parser tests assert
+   against. The corpus-scale check became `scripts/parity-sweep.sh`: both
+   sweepers over a snapshot of the real host directories (23 MB, 45 files), the
+   two logs diffed with `id`/`ts` removed — 2,560 events, identical and in the
+   same order. One real difference surfaced and was fixed: file order, where
+   `Array.sort()` compares whole path strings and `PathBuf` compares components.
+   32 tests; the fold now uses cached prepared statements.
 3. **Config and paths.** serde + `toml`, defaults per worker, `[worker.<name>]`
    catch-all as a flattened map, `deny_unknown_fields` on ingest sources only.
    `paths`, `expand_home`, and the harness tables moved out of `daemon.ts`
