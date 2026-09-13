@@ -371,38 +371,116 @@ Not better, not redesigned. That is what makes it checkable.
 
 ### Order — bottom up, each layer green before the next
 
-1. **Storage.** Read the log, fold the index, rebuild from scratch. *Check:* the
-   SQLite the Rust build produces from the real `events.jsonl` matches the
-   TypeScript one row for row. This single test proves most of the port.
-2. **Ingest.** Claude and Codex parsers. *Check:* same fixtures in, same events out.
-3. **Config and paths.**
-4. **Daemon and socket.**
-5. **Workers.** Docker runner, existing proxy sidecar (unchanged), Claude and Codex
-   harnesses. *Check:* the existing container integration tests.
-6. **Scheduler.** Tasks, turns, timeouts, cancel.
-7. **MCP server and CLI.** *Check:* register the Rust binary with Claude Code in
-   place of the Node one; nothing is missing.
+One module, one PR, tests green per step. The old egress proxy
+(`docker/egress-proxy/server.cjs`) is *not* ported — it runs in its own image and is
+replaced in the redesign. Rust lives in `rust/` (one crate, `lib.rs` + `main.rs`,
+modules named after the TypeScript directories, tests under `rust/tests/`) until the
+TypeScript is deleted, then moves to the root. Each step ticks its line here when it
+lands.
 
-One module, one PR, tests green per step. The old proxy is *not* ported — it is
-replaced in the redesign.
+**What the code says that this list originally missed.** There was no
+`events.jsonl` on the author's machine — the corpus has to be built first. The
+transcript fixtures are inline strings in the tests, not files. There are no
+container integration tests: `tests/workers/integration.test.ts` drives a fake
+`codex` script through `LocalRunner`, and the Docker runner is tested only at the
+argv level. The query and rendering side (`domain/tasks`, `daemon/lookup`,
+`daemon/transcript-view`, `render` — ~1,500 lines, ~1,000 lines of exact-string
+tests) sits on the index and is part of step 1. The shim↔daemon transport is
+internal, not frozen.
+
+0. **Spike and corpus.** `rustup`; a `rust/` skeleton; confirm `rmcp` serves
+   Streamable HTTP on a unix socket (it ships `transport-io`,
+   `transport-streamable-http-server`, `transport-streamable-http-client-unix-socket`
+   and `schemars`; `libsqlite3-sys` bundled enables FTS5). Build the corpus: run the
+   TypeScript daemon once so it sweeps `~/.claude/projects`, and drive one task
+   (assign, continue, cancel) through the real scheduler so the log holds every
+   event kind; freeze the log outside git. `scripts/parity-index.sh <events.jsonl>`
+   refolds the log with both implementations and diffs `sqlite3` dumps of every
+   table ordered by primary key (FTS shadow tables skipped) — the `sqlite3` CLI is
+   the neutral witness. Decision: keep HTTP on the socket; the shim stays a dumb
+   forwarder.
+1. **Storage** — two PRs. *1a* `ids`, `storage/{events,facts,index,artifacts}`:
+   the 16 event bodies as a `type`-tagged enum, torn-tail stop and repair, fsync
+   and the bulk path, schema v7 verbatim, `apply`/`rebuild`/`turn_for`. Tests
+   `events`, `index` (9), `message-facts`, `artifacts` ported 1:1. *Check:*
+   `parity-index.sh` on the corpus prints nothing. Known traps: `ts` must be JS's
+   `toISOString()` shape (`…T10:00:00.000Z`) because timestamps are compared as
+   text in SQL; `serde_json` needs `preserve_order` or every `payload` row differs;
+   JS prints `1.0` as `1`. *1b* `domain/{tasks,projects,policy}`,
+   `view/{transcript,render}`, `lookup`. Tests `outline`, `timeline`, `transcript`,
+   `lookup`, `policy` ported as-is — they already assert exact strings and *are* the
+   golden master; `insta` is for new tests only.
+2. **Ingest.** First a TypeScript PR that moves the inline sample lines into
+   `tests/fixtures/{claude-code,codex}/*.jsonl` (no behaviour change). Then
+   `ingest/{parser,claude_code,codex,registry,sweep,volume}`. The sweep runs on
+   `spawn_blocking`, so the 50 ms yield in `sweep.ts` has no equivalent — the
+   invariant it protected (daemon answers within the shim's 10 s during a backfill)
+   is kept by the runtime, and the test is restated that way. `flush()` before
+   `save_state()` stays. *Check:* parser tests (fixtures in, same messages out), the
+   11 sweep cases, `volume`; and a fresh Rust sweep of the same host directories
+   refolded and diffed against the corpus with ids and `*_recorded_at` projected
+   out.
+3. **Config and paths.** serde + `toml`, defaults per worker, `[worker.<name>]`
+   catch-all as a flattened map, `deny_unknown_fields` on ingest sources only.
+   `paths`, `expand_home`, and the harness tables moved out of `daemon.ts`
+   (`HARNESS_KINDS`, `AUTH_MOUNTS`, `DEFAULT_IMAGES`, `TRANSCRIPT_SUBDIR/FORMAT`,
+   `ingestSources`, `buildHarnesses`). *Check:* there is no `config.test.ts`, so a
+   five-line TypeScript script prints `JSON.stringify(loadConfig(f))` for a handful
+   of sample files (empty, custom worker, oss worker, extra source, bad key) and the
+   Rust binary prints the same; diff. Plus `harnesses.test` and a strict-rejection
+   test.
+4. **Daemon and socket.** Lock via `hard_link`, the boot order (repair → rebuild →
+   recover crashed turns → listen → chmod 0600 → reap copy-out containers → sweep),
+   `/status`, the read routes, MCP sessions recording `session.started/ended` with
+   **no tools yet**, sweep timer, `stop()` in today's order. The shim and
+   `up`/`down`/`status` land here — the daemon is untestable from outside without
+   them. *Check:* `daemon` cases except the config-only-worker one, the shim race
+   test, and `claude mcp add` against the Rust binary showing zero tools.
+5. **Workers** — two PRs. *5a* `workers/runner` (docker argv, network, proxy
+   sidecar, egress log → `on_egress`, `dispose`), `workspace/{git,clone}`; tests
+   `runner`, `clone`. *5b* `workers/{harness,claude,codex}`; tests `claude`, `codex`
+   against the fake binaries, extracted to `tests/fixtures/fake-{claude,codex}.js`
+   and run with `node` (a test-only dependency). *Check:* those, plus a new
+   env-gated `TASKRUNNER_LIVE_DOCKER=1` test that runs `echo` in a worker image
+   behind the real proxy — the runner has no automated exercise today.
+6. **Scheduler.** Assign/continue/cancel, `wait`, one running turn per task,
+   timeouts, tiers and approvals, worker-session and artifact events, `afterTurn`;
+   wired into the daemon's `stop()`. *Check:* the 14 scheduler cases, `integration`
+   (fake codex + clone workspaces), daemon's config-only worker, and one manual
+   `TASKRUNNER_LIVE_CODEX=1` run.
+7. **MCP server and CLI** — two PRs. *7a* the six tools, the `tool.<name>` audit
+   wrapper, `buildInstructions` verbatim; `tools` test. *Check:* `initialize` +
+   `tools/list` through both shims, JSON diffed — names and argument names must
+   match exactly, and schema noise (`$schema`, `additionalProperties`) is matched
+   rather than stripped, since Claude Code reads it. *7b* `sessions/session/search/
+   task/tasks/doctor`, usage text, `--state-root`, EPIPE guard. *Check:*
+   `scripts/parity-cli.sh` runs a fixed list of commands against the corpus with
+   both binaries and diffs byte for byte. Then register the Rust binary with Claude
+   Code and use it daily. `doctor` has no tests and nothing depends on it; it goes
+   last.
 
 ### Crates
 
 | Need | Crate |
 |---|---|
-| JSONL, config | `serde`, `serde_json`, `toml` |
+| JSONL, config | `serde`, `serde_json` (`preserve_order`), `toml` |
 | SQLite + FTS5 | `rusqlite` (bundled) |
-| Async, socket, process spawn | `tokio` |
+| Async, socket, process spawn | `tokio`, `hyper` |
 | MCP | `rmcp` (official Rust SDK) |
 | CLI | `clap` |
 | Ids | `ulid` |
-| Tests | `cargo test`; `insta` for snapshots |
+| Tests | `cargo test`; `insta` for new snapshots only |
 
 ### Done when
 
-`cargo test` is green; the Rust index built from the real log equals the TypeScript
-one; the Rust binary has been the daily driver long enough to trust. Then the
-TypeScript is deleted — not kept alongside — and the redesign begins.
+`cargo test` is green; `parity-index`, the sweep parity, the config parity, the
+`tools/list` diff and `parity-cli` are all empty; the Rust binary has been the daily
+driver long enough to trust. Then one PR deletes `src/`, `tests/`, `package.json`,
+`tsconfig.json`, `vitest.config.ts` and `scripts/debug-refold.ts`, moves `rust/` to
+the root, and updates `README`, `getting-started` (install is one binary) and
+`internals` (`tsx`/`vitest` → `cargo`; the event-loop-yield paragraph goes).
+`scripts/build-images.sh` and `docker/` are untouched. Not kept alongside; then the
+redesign begins.
 
 ### Cost, honestly
 
