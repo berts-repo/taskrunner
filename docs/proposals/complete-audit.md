@@ -139,37 +139,73 @@ under 5% of the log.
 
 ```
 taskrunner setup
-  Run your own agent inside Docker?          [no]
-    Paths it may see besides the project:    ~/.gitconfig, ...
-  Record your host sessions through the proxy?  [no]   (needs the daemon service)
+  Which agents do you use?                   [claude, codex, hermes]
+  For each:
+    Run it inside Docker?                    [no]
+      Paths it may see besides the project:  ~/.gitconfig, ...
+    Record its sessions through the proxy?   [no]   (needs the daemon service)
   Worker capture is always on.
 ```
 
-Every answer is a config key, not a lock-in. `taskrunner capture enable|disable` and
-the choice of `claude` vs `taskrunner shell` flip them later.
+Every answer becomes a `[host.<name>]` key (see below), not a lock-in.
+`taskrunner capture enable|disable` and the choice of `claude` vs `taskrunner shell`
+flip them later.
 
-## One search tool, everywhere
+## Hosts: one section per harness, and Hermes stays Hermes
 
 The parser copies Hermes's rows into the archive; the agent is not involved and does
-no sorting. The copy on disk is harmless. The redundancy that *does* matter is in the
-agent's tool list: inside Hermes the model would see two tools that answer "what did
-we do about X" — Hermes's `session_search` and taskrunner's `search-transcripts` —
-and has to guess which.
+no sorting. The copy on disk is harmless. What *does* matter is the agent's tool
+list: inside Hermes the model would see two tools that answer "what did we do about
+X" — Hermes's `session_search` and taskrunner's `search-transcripts`.
 
-Recording never turns off; what is chosen is which tool the agent sees:
+An earlier draft resolved this by disabling Hermes's search and using taskrunner's
+everywhere. **Reversed.** Taskrunner is a record you look things up in; Hermes's
+memory (curated notes in every prompt, session lineage, the agent knowing you across
+time) is the agent remembering — and that is the reason to run Hermes at all. Nothing
+in Hermes is turned off: not `memory_enabled`, not `session_search`, not
+`delegate_task`. Taskrunner ingests `state.db` silently; Hermes never notices.
 
-- Keep both — ❌ the model guesses; answers differ by which it picked.
-- Hide taskrunner's search in Hermes — ✅ feels native. ❌ Hermes's tool knows only
-  Hermes sessions: no Claude Code or Codex history, no inside of a delegated turn.
-- Hide Hermes's `session_search` (its `disabled_toolsets`) and use taskrunner's —
-  ✅ one tool, and it is the superset. ❌ loses Hermes's scroll/browse shapes unless
-  taskrunner's tools grow them.
+**Decision: scope taskrunner's tools per host instead.** Today `[worker.<name>]`
+describes what taskrunner *runs*; a `[host.<name>]` section describes what *runs
+taskrunner*. Everything about a host lands in one place:
 
-**Decision: the third.** The archive is the audit, so its search is the one the agent
-reaches for in every harness. Which is the reason to copy Hermes's ergonomics into
-`search-transcripts` / `lookup-session`: `role_filter` defaulting to
-`user,assistant`, scroll-around-a-message, browse-recent, demote (not hide)
-automation sessions in ranking.
+```toml
+[host.claude]
+capture = "files"          # "files" | "proxy" | "docker"
+search  = "all"            # no memory of its own; taskrunner is its recall
+
+[host.codex]
+capture = "files"
+search  = "all"
+
+[host.hermes]
+capture = "files"
+search  = "workers"        # Hermes keeps its own history; taskrunner answers
+ingest  = "~/.hermes/state.db"   # only for delegated turns and other harnesses
+```
+
+- `capture` — how this host's sessions reach the archive (the three modes above);
+  `docker` adds a `mounts` allowlist.
+- `search` — what taskrunner's `search-transcripts` / `lookup-session` cover when
+  this host asks: `all`, `workers` (delegated turns and *other* harnesses'
+  sessions), or `none`. Tool descriptions state the scope, so the model has no
+  reason to guess between two tools.
+- `ingest` — where this host's own transcripts are read from.
+
+The MCP server is registered per harness anyway (`claude mcp add …`, Hermes's
+config), so the registration passes `--host <name>` and the server loads that
+section; nothing is inferred from the connection.
+
+`assign-task` and Hermes's `delegate_task` both stay: one delegates to a Docker
+worker with an audit trail, the other to a Hermes subagent. Different tools,
+distinct descriptions, no collision.
+
+Named `host`, not `profile`: Hermes already uses "profile" for its multiple-home
+feature, and two things called profile would confuse.
+
+Hermes's search ergonomics are still worth copying into taskrunner's tools for the
+hosts that rely on them: `role_filter` defaulting to `user,assistant`,
+scroll-around-a-message, browse-recent, demote (not hide) automation sessions.
 
 ## Storage: what to borrow from Hermes, what not to
 
@@ -339,11 +375,8 @@ Clean and readable is a goal of the redesign, not a nicety after it.
 - **Scope of "audit".** Egress decisions and changed files are logged already.
   Config changes, task assignments and capture on/off events are not; they should
   be, so the archive shows its own gaps.
-- **Hermes beyond search.** Hermes also ships `delegate_task`, which collides with
-  `assign-task` the way `session_search` collides with `search-transcripts`; same
-  answer (disable Hermes's, use taskrunner's) or not? And Hermes is only a *host*
-  harness in this proposal — is `[worker.hermes]` (an image, headless mode, its
-  login) wanted too?
+- **Hermes as a worker.** Hermes is a *host* in this proposal. Is `[worker.hermes]`
+  (an image, its headless mode, its login) wanted too?
 - **Hermes parser.** `state.db` schema is versioned and migrates; the parser reads
   `sessions` + `messages` (read-only, WAL is fine while Hermes writes) and must
   tolerate drift. Lean: ingest every source including `subagent`/`kanban`, demote
