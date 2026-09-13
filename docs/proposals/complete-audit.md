@@ -116,6 +116,25 @@ narrows the blast radius, it does not replace the boundary. Vaulting (encrypt in
 place, recover with a key) was considered and rejected for now: a key on the same
 machine gains little over plaintext.
 
+## Decided: the log is hash-chained from line 1
+
+Append-only is a promise the code keeps, not something the file proves. Each event
+carries the SHA-256 of the previous event; editing, deleting or reordering any past
+line breaks the chain at that point and `taskrunner verify` finds it in one pass.
+Same mechanism as git commit parents and certificate-transparency logs.
+
+What it does not do on its own: stop someone re-hashing everything after their edit,
+or detect truncation at the tail. Both need an **anchor** — the current chain head
+written somewhere the log writer cannot reach. Simplest: the daemon appends the head
+to a second file every N events; stronger anchors (a git commit, a line in a
+notebook, a friend's copy) are the user's choice. The chain proves a record has not
+changed since it was written — not that it was true when written.
+
+Starts with the Rust port, which rewrites the event writer anyway. Adding it later
+would leave the old history as a permanent "trust me" zone or require re-hashing it
+— exactly the act the chain exists to make suspicious. Cost: one field per line,
+under 5% of the log.
+
 ## Install flow (sketch)
 
 ```
@@ -186,24 +205,51 @@ that makes one archive across harnesses possible. Keep all of it.
 
 **Do not borrow:** mutable DB as truth, insert triggers, silent age-based pruning.
 
-### Size and retention
+### Size and retention — decided
 
-Measured 2026-09-13 on the author's machine: 7.9 MB of Claude Code transcripts (28
-sessions, 30 days) and 11 MB of Codex — about **20 MB/month raw**, so ~250 MB/year of
-log; the FTS index roughly doubles it to **~0.5 GB/year**. A heavy user with large
-tool results might be 5–10× that. SQLite and FTS5 are comfortable into hundreds of
-GB. Space is not the pressure; search quality (old noise crowding results) is, and
-that is a ranking problem, not a deletion problem.
+**What the wire actually carries.** Every model call re-sends the system prompt
+(~60 KB), the tool definitions (~50 KB) and the whole conversation so far. For the
+author's month of Claude Code — 8.5 MB of transcript, ~2,500 calls — that is roughly
+275 MB of repeated headers plus ~190 MB of re-sent conversation: **~0.5 GB seen,
+about 60× the transcript**. Under the storage decision above (new messages per call,
+constants once by hash, one hash per call) what is *kept* is ~15–20 MB/month — about
+2× the transcript, because system prompts, tool schemas and side traffic the
+transcript hides are now held too. Hash-chaining adds one hash per line, under 5%.
 
-Pruning is the *harness's* choice for its working copy (Claude deletes at 30 days,
-Hermes optionally by age). The archive is the thing that does not forget; if it
-prunes too, nothing remembers. When shrinking is needed:
+**Nobody else keeps this.** Claude Code deletes its local transcripts after 30 days
+by default; Anthropic retains consumer sessions for 30 days (5 years if "improve the
+model" is on) and only for its own use; Codex and Hermes are their own working
+copies. Taskrunner is the only complete, searchable record the user holds.
 
-- **Archive and detach** — move old log segments to cold storage (JSONL compresses
-  ~10×), keep the index over recent history. Nothing destroyed, just not hot.
-- **Explicit, logged deletion** if truly required — append a `retention.pruned`
-  event naming what was removed and why, so the archive records its own gap.
-- Never silent, never age-based by default.
+**Decision: keep the log, search a window.** Three tiers:
+
+| Tier | What | Default |
+|---|---|---|
+| Hot | Recent history in the SQLite + FTS index | 30 days |
+| Cold | Older log segments, compressed (~10×) on disk, hash chain intact | keep forever |
+| Raw | Wire-capture bodies for debugging | 7 days, then deleted by a logged event |
+
+The audit is never deleted by default; only the *index* is bounded. A month hot is
+~40 MB at the author's rate; a year cold is a few tens of MB compressed.
+
+```toml
+[retention]
+hot_days = 30        # indexed and searchable; change any time
+cold     = "keep"    # or "180d", "2y" — deletion is explicit and logged
+raw_days = 7         # wire-capture bodies
+```
+
+Commands: `taskrunner thaw <range>` / `freeze <range>` move segments between hot
+and cold; `export <range> --out archive.tar.zst` writes a portable, compressed,
+chained slice and `import` restores one (or loads a friend's); `prune <range>` is
+the only thing that deletes and always appends `retention.pruned` first. Asking
+search for something older than the hot window says so and names the thaw command
+rather than silently returning nothing.
+
+**Levers if size ever matters** (it is a search-quality problem long before a disk
+one): don't full-text index thinking blocks (the largest single item and the least
+searchable); store large tool results once by content hash; raise `hot_days` only
+as far as search stays useful.
 
 ## Rust port — before the redesign
 
@@ -290,9 +336,6 @@ Clean and readable is a goal of the redesign, not a nicety after it.
 
 ## Open questions
 
-- **Tamper-evidence.** If the archive must *prove* a record was not altered later,
-  the append-only event log wants hash-chaining now, before there is history to
-  migrate. Not decided.
 - **Scope of "audit".** Egress decisions and changed files are logged already.
   Config changes, task assignments and capture on/off events are not; they should
   be, so the archive shows its own gaps.
