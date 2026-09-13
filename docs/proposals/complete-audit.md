@@ -79,6 +79,43 @@ Three ways to run it, chosen at install and changeable any time:
    an SSH key, a tools directory) and records them in config; `taskrunner shell`
    mounts only those. Everything else in the home directory stays invisible.
 
+## Decided: what the wire capture stores
+
+Every API call re-sends the whole conversation, so raw capture is quadratic in the
+session — 50–100× the transcript file, and search full of the same message repeated
+per call. Three options were weighed: store it all raw; store only what is new per
+call; store what is new per call **plus a hash of every full request body**.
+
+**Decision: the third.** Per call, the proxy keeps the messages past the common
+prefix with the previous request, the response (streamed chunks reassembled), the
+system prompt once by content hash, and a SHA-256 of the complete request body.
+Storage is linear again, each message is searched once, and any call's exact input
+to the model can still be *proven* — hash matches or it doesn't — without being
+stored. Raw bodies may be kept for a short debugging window (7 days), then dropped
+by a logged `retention.pruned` event, never silently.
+
+This also settles **same message, two witnesses**: wire capture then produces
+messages in transcript shape, so matching them to file-ingested ones is a
+reconciliation step (content hash + position within the session), not a second
+data model. One message, two sources recorded against it.
+
+## Decided: secrets are redacted, and the redaction is the record
+
+The audit question about a leaked secret is *what kind, when, through which tool,
+in which session, to which model* — none of which needs the value. Storing values
+would make the archive a secrets store: every backup, export, search hit or shared
+copy can leak again, and an append-only log cannot rotate a secret out.
+
+**Decision: redact with a marker and a fingerprint, always on.** The value is
+replaced in place by `[REDACTED <kind> sha256:<prefix>]` and a `secret.redacted`
+event is appended (kind, source, session, tool, position). A suspected value can be
+hashed and compared later, so *which* secret can be proven without ever holding it.
+Detection is pattern-based and will both miss and over-match; the visible marker is
+what makes over-matching harmless. The archive stays `0700` and local — redaction
+narrows the blast radius, it does not replace the boundary. Vaulting (encrypt in
+place, recover with a key) was considered and rejected for now: a key on the same
+machine gains little over plaintext.
+
 ## Install flow (sketch)
 
 ```
@@ -259,14 +296,28 @@ Clean and readable is a goal of the redesign, not a nicety after it.
 - **Scope of "audit".** Egress decisions and changed files are logged already.
   Config changes, task assignments and capture on/off events are not; they should
   be, so the archive shows its own gaps.
+- **Hermes beyond search.** Hermes also ships `delegate_task`, which collides with
+  `assign-task` the way `session_search` collides with `search-transcripts`; same
+  answer (disable Hermes's, use taskrunner's) or not? And Hermes is only a *host*
+  harness in this proposal — is `[worker.hermes]` (an image, headless mode, its
+  login) wanted too?
 - **Hermes parser.** `state.db` schema is versioned and migrates; the parser reads
-  `sessions` + `messages` and must tolerate drift. Hides `subagent`/`kanban`/`tool`
-  sources the same way Hermes's own search does? Or ingests them — they are the
-  audit — and demotes them in ranking? Lean: ingest everything, rank later.
+  `sessions` + `messages` (read-only, WAL is fine while Hermes writes) and must
+  tolerate drift. Lean: ingest every source including `subagent`/`kanban`, demote
+  in ranking rather than hide.
 - **Search ergonomics.** Hermes's `session_search` defaults `role_filter` to
   `user,assistant` (tool output is noise unless asked for) and hides automation
   sessions from discovery. Taskrunner's `search-transcripts` has the same noise
   problem with worker turns; worth copying.
+- **`rmcp` spike.** The port assumes the official Rust MCP SDK covers what the
+  TypeScript one does here (stdio server, tool schemas, sessions). One afternoon to
+  confirm, before port step 1.
+- **Daemon as a service.** systemd user unit / launchd, install and uninstall
+  commands, what a stop does to a running task. Small, but it gates host capture and
+  `taskrunner shell`.
+- **Testing the proxy.** Needs a fake upstream that speaks the Anthropic and OpenAI
+  streaming shapes. Local models (Ollama, LM Studio) are plain HTTP — capture is
+  trivial there and needs no certificate.
 
 ## Not doing
 
