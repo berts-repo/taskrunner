@@ -207,6 +207,47 @@ Hermes's search ergonomics are still worth copying into taskrunner's tools for t
 hosts that rely on them: `role_filter` defaulting to `user,assistant`,
 scroll-around-a-message, browse-recent, demote (not hide) automation sessions.
 
+## Skills and agents across harnesses
+
+**Skills: global by default.** Claude Code, Codex and Hermes all read the same
+`SKILL.md` format (the agentskills.io spec), so one copy can serve every harness.
+The user's machine already does this: Omarchy keeps its skills in one place and
+symlinks them into `~/.claude/skills/` and `~/.codex/skills/`; Hermes reads shared
+folders directly via `skills.external_dirs` and names `~/.agents/skills/` as the
+convention.
+
+```
+~/.agents/skills/            global — one copy, every harness
+~/.taskrunner/skills/        taskrunner's own (worker-login, …), also global
+[host.<name>].skills = [...] per-host extras, linked into that harness only
+```
+
+`taskrunner sync` symlinks the global set into each host's skills directory (and
+adds the `external_dirs` entry for Hermes), links per-host extras only where they
+belong, and removes links it made that are no longer wanted. Nothing is copied;
+editing a global skill changes it everywhere.
+
+**Agents: per-harness by default.** There is no standard. Claude Code agents are
+markdown files under `~/.claude/agents/` (name, description, tools, model, system
+prompt); Codex has no agent files, only `AGENTS.md` instructions; Hermes subagents
+are defined by the `delegate_task` call itself (goal + context), not by files.
+
+- Per-harness, native format, taskrunner manages only *which* are active per host —
+  ✅ full fidelity. ❌ an agent wanted everywhere is written up to three times.
+- Taskrunner-owned definitions rendered into each harness's shape — ✅ one source.
+  ❌ lossy: `tools` and `model` do not translate; lowest common denominator.
+
+**Decision:** native per-harness agents by default, managed per `[host.<name>]`.
+A small opt-in *portable agent* format (description + instructions + suggested
+tools) for the agents that are really a skill with a role attached — most are —
+rendered by `taskrunner sync` into a Claude agent file, a Hermes skill that says how
+to delegate that role, or an `AGENTS.md` section. Anything needing harness-specific
+tools or models stays native and is not made portable.
+
+This is how companies do it too: a shared skills/prompt repo synced into every
+tool, tool-specific agent configs kept next to the tool. Nobody has a working
+universal agent format yet.
+
 ## Storage: what to borrow from Hermes, what not to
 
 Both designs end in SQLite with FTS5 over a `messages` table. The difference is what
