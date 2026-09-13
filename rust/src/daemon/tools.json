@@ -1,0 +1,305 @@
+[
+  {
+    "name": "assign-task",
+    "description": "Delegate a new task to a configured worker in an isolated task workspace. Returns immediately with a running status unless wait is true; retrieve results with lookup-task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Absolute path of the project directory"
+        },
+        "worker": {
+          "type": "string",
+          "description": "Configured worker capability, e.g. 'codex'"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Delegated instruction text for the first turn"
+        },
+        "wait": {
+          "type": "boolean",
+          "description": "Block until the turn completes instead of returning immediately"
+        },
+        "allowDomains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra outbound domains the task may reach beyond the worker's API defaults (e.g. registry.npmjs.org), or '*' for the full public internet (local and private addresses stay blocked). Makes the task 'networked': you must ask the user for permission and set userApproved."
+        },
+        "userApproved": {
+          "type": "boolean",
+          "description": "Set true only after the user explicitly said yes to the extra network access in this conversation; the approval is recorded as relayed by you."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Optional caller identity and correlation data"
+        }
+      },
+      "required": [
+        "project",
+        "worker",
+        "prompt"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "continue-task",
+    "description": "Send a follow-up prompt to an existing task, resuming its worker session. Returns immediately unless wait is true. Returns a conflict error while a turn is already running.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Follow-up instruction text"
+        },
+        "wait": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "taskId",
+        "prompt"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "lookup-task",
+    "description": "Look up delegated tasks. Compact summary by default; expand with include (turns = paired prompt/response exchanges, trace = end-to-end replay of inputs/worker activity/outputs, audit, artifacts, diff, transcript = the archived interior of the worker's own session). Scope narrows expansions to one turn or the last N exchanges (for transcript, the last N messages). Pass project instead of taskId to list a project's tasks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string",
+          "description": "Absolute project path: list that project's tasks instead"
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "turns",
+              "artifacts",
+              "audit",
+              "diff",
+              "trace",
+              "transcript"
+            ]
+          }
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "turnId": {
+              "type": "string"
+            },
+            "last": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Last N exchanges"
+            }
+          },
+          "additionalProperties": false
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 50,
+          "description": "Max tasks to list"
+        },
+        "view": {
+          "type": "string",
+          "enum": [
+            "outline",
+            "compact",
+            "timeline"
+          ],
+          "description": "outline (default): the scannable index — one line per prompt, reply and tool call, each exchange addressed [N]; no message bodies. compact: one truncated line per message, including tool results. timeline: the audit view — prompts, replies and reasoning in full, tool bodies clipped to toolLines. Passing prompt N implies timeline; passing scope.last implies compact."
+        },
+        "toolLines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "description": "timeline only: lines kept of each tool body; 0 keeps all (default 20)"
+        },
+        "prompt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Return only the exchange at this prompt index — one real user prompt and everything that followed it. This is the drill-down step: outlines mark exchanges as [N] and every search hit reports the prompt it came from."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "lookup-session",
+    "description": "Browse ingested transcript sessions (one conversation = one Claude Code / Codex session). With no sessionId: lists sessions most-recent first, optionally filtered to a project. With a sessionId: returns that session as an outline — every exchange addressed [N], nothing loaded in full — then pass prompt N to read one, or view timeline for the whole thing. Works for host sessions no task links (unlike lookup-task's transcript). scope.last caps the messages shown. Freshly sweeps host transcripts first, so the newest session reflects the live conversation up to its last flushed line.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Native session id to read; omit to list recent sessions"
+        },
+        "project": {
+          "type": "string",
+          "description": "Absolute project path filter (applies to the session list)"
+        },
+        "source": {
+          "type": "string",
+          "description": "Disambiguate a sessionId shared across sources, e.g. 'claude-code'"
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "description": "Max sessions to list"
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "last": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Last N messages"
+            }
+          },
+          "additionalProperties": false
+        },
+        "view": {
+          "type": "string",
+          "enum": [
+            "outline",
+            "compact",
+            "timeline"
+          ],
+          "description": "outline (default): the scannable index — one line per prompt, reply and tool call, each exchange addressed [N]; no message bodies. compact: one truncated line per message, including tool results. timeline: the audit view — prompts, replies and reasoning in full, tool bodies clipped to toolLines. Passing prompt N implies timeline; passing scope.last implies compact."
+        },
+        "toolLines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "description": "timeline only: lines kept of each tool body; 0 keeps all (default 20)"
+        },
+        "prompt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Return only the exchange at this prompt index — one real user prompt and everything that followed it. This is the drill-down step: outlines mark exchanges as [N] and every search hit reports the prompt it came from."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "search-transcripts",
+    "description": "Search the ingested transcripts — the archived interior of delegated worker turns and host agent sessions. Two ways to search, combinable: by text (query, SQLite FTS5 syntax — bare words are ANDed, \"quoted text\" matches a phrase), and by what a tool call did (tool, target, failed), which answers questions text search answers badly: which sessions touched a file, where a command failed, every Edit under a path. One of the two is required. Each hit reports its session and prompt index — pass that prompt to lookup-session to read the exchange. Further filters scope to a project, sessions, the last N sessions, a time window, or a role/kind.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "FTS5 search expression; omit to search by tool/target/failed alone"
+        },
+        "tool": {
+          "type": "string",
+          "description": "Only calls of this tool, e.g. 'Edit' or 'Bash'"
+        },
+        "target": {
+          "type": "string",
+          "description": "Substring of the path or command a call acted on, e.g. 'src/shim/proxy.ts'"
+        },
+        "failed": {
+          "type": "boolean",
+          "description": "true: only calls that failed. false: only calls that succeeded. Calls whose record states no outcome (rejected, aborted) are excluded either way."
+        },
+        "project": {
+          "type": "string",
+          "description": "Restrict to this absolute project path"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Restrict to these native session ids"
+        },
+        "lastSessions": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Restrict to the most-recent N sessions (within project when set)"
+        },
+        "since": {
+          "type": "string",
+          "description": "Only messages with native_ts >= this ISO timestamp"
+        },
+        "until": {
+          "type": "string",
+          "description": "Only messages with native_ts <= this ISO timestamp"
+        },
+        "role": {
+          "type": "string",
+          "description": "Restrict to one role, e.g. 'user'"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Restrict to one kind, e.g. 'message' | 'tool_use' | 'reasoning'"
+        },
+        "sort": {
+          "type": "string",
+          "enum": [
+            "rank",
+            "recent"
+          ],
+          "description": "'rank' relevance (default) or 'recent' newest-first; without a query, hits are always newest-first"
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 50,
+          "description": "Max hits to return (default 20)"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "cancel-task",
+    "description": "Cancel the running turn of a task. The audit trail and task workspace are preserved.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Recorded in the audit trail"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  }
+]

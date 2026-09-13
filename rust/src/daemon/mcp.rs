@@ -1,14 +1,20 @@
 //! One MCP service per connected client. A connection is a session: the
 //! `session.started` event is recorded when the client's `initialize`
-//! completes and `session.ended` when the connection closes. Tools arrive in
-//! step 7 of the port.
+//! completes (or on the first tool call, whichever comes first) and
+//! `session.ended` when the connection closes. Every tool call is audited
+//! as `tool.<name>` with its arguments, then dispatched to `tools::call`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use rmcp::model::{ServerCapabilities, ServerInfo};
-use rmcp::service::{NotificationContext, RoleServer};
-use rmcp::{ServerHandler, model::Implementation};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+    PaginatedRequestParams, ServerCapabilities, ServerInfo,
+};
+use rmcp::service::{NotificationContext, RequestContext, RoleServer};
+use rmcp::{ErrorData, ServerHandler, model::Implementation};
 
+use super::Daemon;
+use super::tools::{ToolCallError, ToolTable};
 use crate::config::Config;
 use crate::ids::{IdPrefix, new_id};
 use crate::storage::Recorder;
@@ -111,20 +117,80 @@ impl Default for SessionRecord {
 
 #[derive(Clone)]
 pub struct McpService {
-    pub store: SharedStore,
-    pub instructions: String,
-    pub session: std::sync::Arc<SessionRecord>,
+    pub daemon: Daemon,
+    pub tools: Arc<ToolTable>,
+    pub session: Arc<SessionRecord>,
+}
+
+impl McpService {
+    /// Records session.started once, from the handshake's client name.
+    fn ensure_started(&self, peer: &rmcp::service::Peer<RoleServer>) {
+        let client = peer.peer_info().map(|info| info.client_info.name.clone());
+        self.session.ensure_started(&self.daemon.store, client);
+    }
 }
 
 impl ServerHandler for McpService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("taskrunner", VERSION))
-            .with_instructions(self.instructions.clone())
+            .with_instructions(build_instructions(&self.daemon.config))
     }
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
-        let client = context.peer.peer_info().map(|info| info.client_info.name.clone());
-        self.session.ensure_started(&self.store, client);
+        self.ensure_started(&context.peer);
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(self.tools.tools.clone()))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        // The initialized notification and the first tool call arrive
+        // separately; whichever lands first opens the session record.
+        self.ensure_started(&context.peer);
+        let args = request.arguments.unwrap_or_default();
+        // Invalid arguments are a protocol error, as the TypeScript SDK reports
+        // them: the tool never runs and nothing is audited.
+        let args = match self.tools.check(&request.name, &args) {
+            Ok(args) => args,
+            Err(ToolCallError::UnknownTool) => {
+                return Err(ErrorData::invalid_params(
+                    format!("unknown tool {}", request.name),
+                    None,
+                ));
+            }
+            Err(ToolCallError::InvalidArguments(detail)) => {
+                return Err(ErrorData::invalid_params(
+                    format!("invalid arguments for {}: {detail}", request.name),
+                    None,
+                ));
+            }
+        };
+        let _ = self.daemon.store.record(EventBody::AuditRecorded {
+            session_id: Some(self.session.session_id.clone()),
+            task_id: None,
+            turn_id: None,
+            kind: format!("tool.{}", request.name),
+            payload: serde_json::Value::Object(args.clone()),
+        });
+        let text =
+            match super::tools::call(&self.daemon, &self.session.session_id, &request.name, &args)
+                .await
+            {
+                Ok(text) => {
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]).into());
+                }
+                Err(err) => err.to_string(),
+            };
+        Ok(CallToolResult::error(vec![ContentBlock::text(text)]).into())
     }
 }

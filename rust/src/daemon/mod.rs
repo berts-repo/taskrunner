@@ -12,6 +12,7 @@ mod lock;
 pub mod mcp;
 pub mod scheduler;
 mod sweep_gate;
+mod tools;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -69,8 +70,9 @@ fn docker_runner_factory(config: Arc<Config>, store: SharedStore) -> Arc<MakeRun
         }))
     })
 }
-use mcp::{McpService, SessionRecord, build_instructions};
+use mcp::{McpService, SessionRecord};
 use sweep_gate::SweepGate;
+use tools::ToolTable;
 
 use crate::config::{Config, load_config, worker_config};
 use crate::harnesses::{auth_mounts, build_harnesses, default_image, ingest_sources, worker_kind};
@@ -109,6 +111,7 @@ pub struct Daemon {
     pub store: SharedStore,
     pub artifacts: Arc<ArtifactStore>,
     pub scheduler: Scheduler,
+    tools: Arc<ToolTable>,
     sweeps: SweepGate,
     sessions: Arc<AtomicUsize>,
     shutdown: CancellationToken,
@@ -188,6 +191,7 @@ impl Daemon {
             store,
             artifacts,
             scheduler,
+            tools: Arc::new(ToolTable::load()),
             sweeps: SweepGate::new(sweeper),
             sessions: Arc::new(AtomicUsize::new(0)),
             shutdown: CancellationToken::new(),
@@ -292,8 +296,8 @@ impl Daemon {
         self.sessions.fetch_add(1, Ordering::Relaxed);
         let session = Arc::new(SessionRecord::new());
         let service = McpService {
-            store: self.store.clone(),
-            instructions: build_instructions(&self.config),
+            daemon: self.clone(),
+            tools: self.tools.clone(),
             session: session.clone(),
         };
         let (reader, writer) = stream.into_split();

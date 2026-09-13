@@ -9,6 +9,8 @@ use std::time::Duration;
 #[path = "../helpers/mod.rs"]
 mod helpers;
 
+mod tools;
+
 use rmcp::ServiceExt;
 use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
 use serde_json::{Value, json};
@@ -19,7 +21,7 @@ use taskrunner::paths::{StatePaths, state_paths};
 use taskrunner::storage::events::{EventBody, EventLog, read_events};
 
 /// A throwaway state root under /tmp: short, so the socket path fits.
-fn short_root() -> (tempfile::TempDir, StatePaths) {
+pub fn short_root() -> (tempfile::TempDir, StatePaths) {
     let dir = tempfile::Builder::new().prefix("tr-").tempdir_in("/tmp").unwrap();
     let paths = state_paths(dir.path());
     (dir, paths)

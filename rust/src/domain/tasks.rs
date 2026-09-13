@@ -472,7 +472,8 @@ pub struct TranscriptHit {
     pub snippet: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SearchSort {
     /// Relevance.
     #[default]

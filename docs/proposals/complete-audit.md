@@ -505,7 +505,16 @@ internal, not frozen.
    wrapper, `buildInstructions` verbatim; `tools` test. *Check:* `initialize` +
    `tools/list` through both shims, JSON diffed — names and argument names must
    match exactly, and schema noise (`$schema`, `additionalProperties`) is matched
-   rather than stripped, since Claude Code reads it. *7b* `sessions/session/search/
+   rather than stripped, since Claude Code reads it. **7a done 2026-09-13**, by
+   a different route than planned: getting zod's draft-07 output byte for byte
+   out of `schemars` would have been fragile, so the tool contract is data —
+   `rust/src/daemon/tools.json`, the TypeScript server's own `tools/list`
+   output (names, descriptions, input schemas) — served verbatim and used to
+   validate every call with the `jsonschema` crate, as zod validated before.
+   Invalid arguments are a protocol error and never reach the tool or the
+   audit, as with the TypeScript SDK. `scripts/parity-tools.sh` lists the tools
+   through both shims with one client and diffs: equal (the SDK-generated
+   `execution` entry is dropped; rmcp has no such field). 7 tool tests. *7b* `sessions/session/search/
    task/tasks/doctor`, usage text, `--state-root`, EPIPE guard. *Check:*
    `scripts/parity-cli.sh` runs a fixed list of commands against the corpus with
    both binaries and diffs byte for byte. Then register the Rust binary with Claude

@@ -39,6 +39,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 nix = { version = "0.30", features = ["signal", "process"] }
 async-trait = "0.1"
+jsonschema = { version = "0.35", default-features = false }
 
 [dev-dependencies]
 async-trait = "0.1"

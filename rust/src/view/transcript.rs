@@ -14,7 +14,8 @@ use serde_json::Value;
 use crate::domain::tasks::{OutlineEntry, SessionOutline, TranscriptMessage};
 use crate::js;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TranscriptView {
     Outline,
     Compact,
