@@ -519,7 +519,12 @@ internal, not frozen.
    `scripts/parity-cli.sh` runs a fixed list of commands against the corpus with
    both binaries and diffs byte for byte. Then register the Rust binary with Claude
    Code and use it daily. `doctor` has no tests and nothing depends on it; it goes
-   last.
+   last. **7b done 2026-09-13.** `parity-cli.sh` runs 31 commands (usage, every
+   query command with its flags, the error paths, `status` minus the pid,
+   `doctor`) against both daemons booted on the corpus and diffs stdout, stderr
+   and exit codes: 2,688 lines per side, identical. `parity-views.sh` is retired
+   as planned. What remains of the port is the daily-driver period and the
+   deletion PR.
 
 ### Crates
 

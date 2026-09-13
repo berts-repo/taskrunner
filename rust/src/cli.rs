@@ -11,6 +11,7 @@ use anyhow::Context;
 use crate::client;
 use crate::daemon::mcp::VERSION;
 use crate::daemon::{AlreadyRunning, Daemon, DaemonOptions};
+use crate::doctor::run_doctor;
 use crate::paths::{StatePaths, default_root, state_paths};
 use crate::shim::run_shim;
 
@@ -59,6 +60,75 @@ pub struct Args {
     pub paths: StatePaths,
 }
 
+impl Args {
+    fn flag(&self, name: &str) -> Option<String> {
+        self.flags.get(name).cloned()
+    }
+
+    /// Transcript rendering params for the query routes. The terminal defaults
+    /// to the timeline — an audit view is what a person at a shell wants, and
+    /// a person can page and grep — while the routes themselves default to
+    /// the outline, which is what an agent paying per token needs. Always sent
+    /// explicitly, so the two defaults never have to agree.
+    fn render_flags(&self) -> Vec<(&'static str, Option<String>)> {
+        vec![
+            ("view", Some(self.flag("view").unwrap_or_else(|| "timeline".into()))),
+            ("toolLines", self.flag("tool-lines")),
+            ("prompt", self.flag("prompt")),
+        ]
+    }
+}
+
+/// Fetches a read-only query route from the daemon over the control socket
+/// and prints the plain-text body. Mirrors `status`: a down daemon is a soft
+/// failure.
+async fn read_query(
+    paths: &StatePaths,
+    path: &str,
+    params: &[(&str, Option<String>)],
+) -> Result<i32, anyhow::Error> {
+    let query: Vec<String> = params
+        .iter()
+        .filter_map(|(key, value)| {
+            value.as_deref().filter(|v| !v.is_empty()).map(|v| format!("{key}={}", url_encode(v)))
+        })
+        .collect();
+    match client::get(
+        &paths.socket_path,
+        &format!("{path}?{}", query.join("&")),
+        Duration::from_secs(30),
+    )
+    .await
+    {
+        Ok(res) => {
+            print!(
+                "{}",
+                if res.body.ends_with('\n') { res.body.clone() } else { format!("{}\n", res.body) }
+            );
+            Ok(if res.ok() { 0 } else { 1 })
+        }
+        Err(_) => {
+            println!("taskrunner daemon is not running");
+            Ok(1)
+        }
+    }
+}
+
+/// `URLSearchParams` encoding: application/x-www-form-urlencoded.
+fn url_encode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
 pub fn parse_args(argv: &[String]) -> anyhow::Result<Args> {
     let mut command = None;
     let mut rest = Vec::new();
@@ -97,7 +167,76 @@ pub async fn main(argv: &[String]) -> i32 {
         Some("up") => up(&args.paths).await,
         Some("down") => down(&args.paths).await,
         Some("status") => status(&args.paths).await,
+        Some("doctor") => run_doctor(&args.paths).await,
         Some("mcp") => run_shim(&args.paths).await,
+        Some("sessions") => {
+            read_query(
+                &args.paths,
+                "/lookup-session",
+                &[("project", args.flag("project")), ("limit", args.flag("limit"))],
+            )
+            .await
+        }
+        Some("session") => {
+            let Some(id) = args.rest.first() else {
+                eprintln!("taskrunner: session <id> requires a session id");
+                return 1;
+            };
+            let mut params = vec![
+                ("sessionId", Some(id.clone())),
+                ("source", args.flag("source")),
+                ("last", args.flag("last")),
+            ];
+            params.extend(args.render_flags());
+            read_query(&args.paths, "/lookup-session", &params).await
+        }
+        Some("search") => {
+            let query = args.rest.first().cloned();
+            let structured =
+                ["tool", "target", "failed"].iter().any(|f| args.flags.contains_key(*f));
+            if query.is_none() && !structured {
+                eprintln!("taskrunner: search needs a query, or --tool / --target / --failed");
+                return 1;
+            }
+            let params = [
+                ("query", query),
+                ("tool", args.flag("tool")),
+                ("target", args.flag("target")),
+                ("failed", args.flag("failed")),
+                ("project", args.flag("project")),
+                ("sessions", args.flag("sessions")),
+                ("lastSessions", args.flag("last-sessions")),
+                ("role", args.flag("role")),
+                ("kind", args.flag("kind")),
+                ("since", args.flag("since")),
+                ("until", args.flag("until")),
+                ("sort", args.flag("sort")),
+                ("limit", args.flag("limit")),
+            ];
+            read_query(&args.paths, "/search-transcripts", &params).await
+        }
+        Some("task") => {
+            let Some(id) = args.rest.first() else {
+                eprintln!("taskrunner: task <id> requires a task id");
+                return 1;
+            };
+            let mut params = vec![
+                ("taskId", Some(id.clone())),
+                ("include", args.flag("include")),
+                ("turnId", args.flag("turn")),
+                ("last", args.flag("last")),
+            ];
+            params.extend(args.render_flags());
+            read_query(&args.paths, "/lookup-task", &params).await
+        }
+        Some("tasks") => {
+            read_query(
+                &args.paths,
+                "/lookup-task",
+                &[("project", args.flag("project")), ("limit", args.flag("limit"))],
+            )
+            .await
+        }
         None | Some("help" | "--help" | "-h") => {
             print!("{USAGE}");
             Ok(if args.command.is_none() { 1 } else { 0 })

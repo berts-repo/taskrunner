@@ -4,6 +4,7 @@ pub mod cli;
 pub mod client;
 pub mod config;
 pub mod daemon;
+pub mod doctor;
 pub mod domain;
 pub mod harnesses;
 pub mod ids;
