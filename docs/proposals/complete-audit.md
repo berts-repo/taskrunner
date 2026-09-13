@@ -398,7 +398,15 @@ internal, not frozen.
    refolds the log with both implementations and diffs `sqlite3` dumps of every
    table ordered by primary key (FTS shadow tables skipped) — the `sqlite3` CLI is
    the neutral witness. Decision: keep HTTP on the socket; the shim stays a dumb
-   forwarder.
+   forwarder. **Done 2026-09-13.** Spike findings: rmcp serves over a unix socket
+   through `axum::serve(UnixListener, …)` and needs `allowed_hosts` set (its
+   DNS-rebinding guard rejects a non-loopback `Host`); its unix-socket client
+   round-trips `initialize`/`tools/list`/`tools/call`; `schemars` emits
+   draft-2020-12 schemas where zod emits draft-07 with `additionalProperties:
+   false` — a known step-7 difference. Corpus: 2,396 messages from the real host
+   transcripts plus five tasks driven through the real scheduler with the fake
+   codex (Docker was down) and two MCP sessions; frozen at
+   `~/.taskrunner/corpus/events.jsonl`.
 1. **Storage** — two PRs. *1a* `ids`, `storage/{events,facts,index,artifacts}`:
    the 16 event bodies as a `type`-tagged enum, torn-tail stop and repair, fsync
    and the bulk path, schema v7 verbatim, `apply`/`rebuild`/`turn_for`. Tests

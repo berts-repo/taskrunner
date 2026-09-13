@@ -1,0 +1,37 @@
+[package]
+name = "taskrunner"
+version = "0.1.0"
+edition = "2024"
+description = "Local-first MCP delegation broker: hand tasks to coding-agent workers in isolated Docker containers, with a durable audit trail."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "taskrunner"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: audit payloads are re-serialized into the index, so key
+# order must survive the round trip or every payload row differs from the log.
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "0.9"
+rusqlite = { version = "0.40", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+axum = "0.8"
+rmcp = { version = "3", features = [
+  "server", "client", "transport-io",
+  "transport-streamable-http-server", "transport-streamable-http-client-unix-socket",
+  "schemars",
+] }
+schemars = "1"
+clap = { version = "4", features = ["derive"] }
+ulid = "1"
+sha2 = "0.10"
+chrono = "0.4"
+
+[dev-dependencies]
+insta = "1"
+tempfile = "3"
