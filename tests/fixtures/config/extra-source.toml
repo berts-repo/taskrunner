@@ -1,0 +1,9 @@
+[ingest]
+interval_seconds = 30
+
+[ingest.sources.hermes]
+format = "codex"
+dirs = ["~/.hermes/sessions"]
+
+[ingest.sources.codex]
+dirs = ["/srv/codex"]

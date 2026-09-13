@@ -1,0 +1,12 @@
+[task]
+turn_timeout_seconds = 60
+
+[worker.qwen]
+harness = "codex"
+model = "qwen2.5-coder:32b"
+provider = "ollama"
+allowed_domains = ["host.docker.internal:11434"]
+
+[worker.claude]
+model = "claude-opus-5"
+limits = { memory = "8g" }

@@ -453,7 +453,10 @@ internal, not frozen.
    five-line TypeScript script prints `JSON.stringify(loadConfig(f))` for a handful
    of sample files (empty, custom worker, oss worker, extra source, bad key) and the
    Rust binary prints the same; diff. Plus `harnesses.test` and a strict-rejection
-   test.
+   test. **Done 2026-09-13.** `scripts/parity-config.sh` over six samples in
+   `tests/fixtures/config/` (empty, custom worker, oss worker, extra source,
+   two that must fail) is empty. The harness tables live in `harnesses.rs`;
+   `build_harnesses` itself waits for the harnesses in step 5. 10 tests.
 4. **Daemon and socket.** Lock via `hard_link`, the boot order (repair → rebuild →
    recover crashed turns → listen → chmod 0600 → reap copy-out containers → sweep),
    `/status`, the read routes, MCP sessions recording `session.started/ended` with

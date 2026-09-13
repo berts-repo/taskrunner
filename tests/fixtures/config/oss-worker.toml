@@ -1,0 +1,8 @@
+[worker.local]
+harness = "codex"
+provider = "lmstudio"
+model = "gpt-oss:20b"
+limits = { cpus = 1.5, pids = 64 }
+
+[egress]
+proxy_image = "my/proxy"
