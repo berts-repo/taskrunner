@@ -197,8 +197,16 @@ config), so the registration passes `--host <name>` and the server loads that
 section; nothing is inferred from the connection.
 
 `assign-task` and Hermes's `delegate_task` both stay: one delegates to a Docker
-worker with an audit trail, the other to a Hermes subagent. Different tools,
-distinct descriptions, no collision.
+worker with an audit trail, the other to a Hermes subagent. There is no scheduler
+deciding between them — the model reads the tool descriptions and picks — so the
+`assign-task` description for the Hermes host must draw the line: *quick in-process
+helper on the pinned model → `delegate_task`; durable Hermes-team work → Kanban; a
+specific worker on another harness or model, isolated and audited → `assign-task`.*
+
+Hermes writes every subagent run to `state.db` as its own session
+(`source = "subagent"`, `parent_session_id` set) and hides those from its own
+search. The parser ingests them, keeps the parent link, and demotes them in ranking
+rather than hiding: right call for a memory tool, wrong call for an audit.
 
 Named `host`, not `profile`: Hermes already uses "profile" for its multiple-home
 feature, and two things called profile would confuse.
@@ -418,10 +426,11 @@ Clean and readable is a goal of the redesign, not a nicety after it.
   be, so the archive shows its own gaps.
 - **Hermes as a worker.** Hermes is a *host* in this proposal. Is `[worker.hermes]`
   (an image, its headless mode, its login) wanted too?
-- **Hermes parser.** `state.db` schema is versioned and migrates; the parser reads
-  `sessions` + `messages` (read-only, WAL is fine while Hermes writes) and must
-  tolerate drift. Lean: ingest every source including `subagent`/`kanban`, demote
-  in ranking rather than hide.
+- **Hermes parser drift.** `state.db` schema is versioned and migrates; the parser
+  reads it read-only (WAL is fine while Hermes writes) and must tolerate drift.
+  `kanban.db` (cards, comments, status changes — the "who assigned, who unblocked,
+  why" layer; worker sessions themselves already land in `state.db`) is a second
+  file for the same parser.
 - **Search ergonomics.** Hermes's `session_search` defaults `role_filter` to
   `user,assistant` (tool output is noise unless asked for) and hides automation
   sessions from discovery. Taskrunner's `search-transcripts` has the same noise
@@ -437,6 +446,9 @@ Clean and readable is a goal of the redesign, not a nicety after it.
   trivial there and needs no certificate.
 
 ## Not doing
+
+- Borrowing Hermes Kanban's human-in-the-loop shape (comments, review states,
+  block/unblock, task links). Plausible later; out of scope for this redesign.
 
 - Redesigning and porting at the same time. Port the core first (see above), then
   build the new pieces in Rust only.
