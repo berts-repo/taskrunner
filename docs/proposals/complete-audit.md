@@ -180,25 +180,26 @@ search  = "all"
 
 [host.hermes]
 capture = "files"
-search  = "workers"        # Hermes keeps its own history; taskrunner answers
-ingest  = "~/.hermes/state.db"   # only for delegated turns and other harnesses
+search  = "on-request"     # Hermes remembers its own way; the archive is
+ingest  = "~/.hermes/state.db"   # searched only when the user asks for it
 ```
 
 - `capture` — how this host's sessions reach the archive (the three modes above);
   `docker` adds a `mounts` allowlist.
-- `search` — what taskrunner's `search-transcripts` / `lookup-session` cover when
-  this host asks: `all`, `workers` (delegated turns and *other* harnesses'
-  sessions), or `none`. Tool descriptions state the scope, so the model has no
-  reason to guess between two tools.
+- `search` — when and what taskrunner's `search-transcripts` / `lookup-session`
+  answer for this host: `all`, `workers` (delegated turns and *other* harnesses'
+  sessions), `on-request` (tools present, described as "only when the user asks to
+  search the archive" — the host's own memory does the everyday remembering), or
+  `none`. Tool descriptions state the scope, so the model has no reason to guess.
 - `ingest` — where this host's own transcripts are read from.
 
 The MCP server is registered per harness anyway (`claude mcp add …`, Hermes's
 config), so the registration passes `--host <name>` and the server loads that
 section; nothing is inferred from the connection.
 
-`assign-task` and Hermes's `delegate_task` both stay: one delegates to a Docker
-worker with an audit trail, the other to a Hermes subagent. Different tools,
-distinct descriptions, no collision.
+`assign-task` and Hermes's `delegate_task` both stay. In Hermes, `assign-task` is
+for calling a *different model* — a worker on another harness or a local model —
+and its description says exactly that; everything else is Hermes's own.
 
 Named `host`, not `profile`: Hermes already uses "profile" for its multiple-home
 feature, and two things called profile would confuse.
