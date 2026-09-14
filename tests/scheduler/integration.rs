@@ -14,6 +14,7 @@ use taskrunner::view::lookup::{Include, LookupArgs, LookupDeps, lookup_task};
 use taskrunner::workers::codex::{CodexHarness, CodexHarnessOptions};
 use taskrunner::workers::harness::WorkerHarness;
 use taskrunner::workspace::clone::CloneWorkspaces;
+use taskrunner::workspace::git::HostGit;
 
 use crate::helpers::{LocalRunner, fake_codex, init_git_repo};
 
@@ -33,7 +34,12 @@ fn make_stack() -> Stack {
     );
     let artifacts = Arc::new(ArtifactStore::new(&root.path().join("artifacts")));
     let workspaces_dir = root.path().join("workspaces");
-    let clones = CloneWorkspaces::new(&workspaces_dir, artifacts.clone(), Arc::new(store.clone()));
+    let clones = CloneWorkspaces::new(
+        &workspaces_dir,
+        artifacts.clone(),
+        Arc::new(store.clone()),
+        Arc::new(HostGit),
+    );
     let mut harnesses: HashMap<String, Arc<dyn WorkerHarness>> = HashMap::new();
     harnesses.insert("codex".into(), Arc::new(CodexHarness::new(CodexHarnessOptions::default())));
     let scheduler = Scheduler::new(SchedulerDeps {
@@ -119,6 +125,9 @@ async fn delegates_edits_in_the_task_workspace_and_resumes_the_same_thread() {
     assert!(text.contains("worker.file_change"));
     assert!(text.contains("changed files: hello.txt"));
     assert!(text.contains("worker-events"));
-    // hello.txt is untracked, and the diff artifact is `git diff HEAD`.
-    assert!(text.contains("(no diff artifacts in scope)"));
+    // A file the turn created is untracked, and used to be missing from the
+    // record entirely. The inspection marks it intent-to-add, so what the turn
+    // wrote is in the diff like any other change.
+    assert!(!text.contains("(no diff artifacts in scope)"), "{text}");
+    assert!(text.contains("+line two"), "{text}");
 }

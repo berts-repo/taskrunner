@@ -7,15 +7,13 @@
 //! already-built worker image works as the mount vehicle.
 
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
-use wait_timeout::ChildExt;
+
+use crate::process::{Output, run as run_with_timeout};
 
 /// Marks the throwaway mount containers so a later daemon can recognize and
 /// reap the ones an earlier one left behind. Filtering on this label is what
@@ -42,7 +40,7 @@ pub fn docker_copy_out(
         docker,
         &["create", "--label", COPY_OUT_LABEL, "-v", &format!("{volume}:/v:ro"), image, "true"],
     );
-    let container_id = created.stdout.trim().to_string();
+    let container_id = created.text().trim().to_string();
     if !created.ok || container_id.is_empty() {
         bail!("docker create failed for volume {volume}: {}", created.stderr.trim());
     }
@@ -77,7 +75,8 @@ pub fn reap_copy_out_containers(docker: &str) -> anyhow::Result<usize> {
     if !listed.ok {
         bail!("docker ps failed while reaping copy-out containers: {}", listed.stderr.trim());
     }
-    let ids: Vec<&str> = listed.stdout.lines().map(str::trim).filter(|id| !id.is_empty()).collect();
+    let listed = listed.text();
+    let ids: Vec<&str> = listed.lines().map(str::trim).filter(|id| !id.is_empty()).collect();
     if ids.is_empty() {
         return Ok(0);
     }
@@ -88,54 +87,7 @@ pub fn reap_copy_out_containers(docker: &str) -> anyhow::Result<usize> {
     Ok(ids.len())
 }
 
-struct Output {
-    ok: bool,
-    stdout: String,
-    stderr: String,
-}
-
-/// Runs a command to completion with a timeout. A missing binary or a
-/// timeout reports as a failure with the reason in `stderr`, never a panic.
+/// Every docker call here is bounded: a wedged daemon must not wedge a sweep.
 fn run(command: &str, args: &[&str]) -> Output {
-    let failed = |reason: String| Output { ok: false, stdout: String::new(), stderr: reason };
-    let spawned = Command::new(command)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    let mut child = match spawned {
-        Ok(child) => child,
-        Err(err) => return failed(err.to_string()),
-    };
-    // Drain both pipes on their own threads so a chatty child can never fill
-    // one and block before it exits.
-    let stdout = drain(child.stdout.take());
-    let stderr = drain(child.stderr.take());
-    let status = match child.wait_timeout(DOCKER_TIMEOUT) {
-        Ok(Some(status)) => status,
-        Ok(None) => {
-            let _ = child.kill();
-            return failed(format!("{command} timed out after {}s", DOCKER_TIMEOUT.as_secs()));
-        }
-        Err(err) => return failed(err.to_string()),
-    };
-    Output {
-        ok: status.success(),
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    }
-}
-
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<String> {
-    thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(mut pipe) = pipe {
-            let mut bytes = Vec::new();
-            if pipe.read_to_end(&mut bytes).is_ok() {
-                text = String::from_utf8_lossy(&bytes).into_owned();
-            }
-        }
-        text
-    })
+    run_with_timeout(command, args, DOCKER_TIMEOUT)
 }

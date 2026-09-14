@@ -18,6 +18,7 @@ use taskrunner::client;
 use taskrunner::daemon::scheduler::AssignArgs;
 use taskrunner::daemon::{AlreadyRunning, Daemon, DaemonOptions};
 use taskrunner::paths::{StatePaths, state_paths};
+use taskrunner::storage::artifacts::ArtifactStore;
 use taskrunner::storage::events::{EventBody, EventLog, read_events};
 
 /// A throwaway state root under /tmp: short, so the socket path fits.
@@ -272,6 +273,14 @@ async fn runs_a_worker_that_exists_only_in_config_end_to_end() {
                     Some(&helpers::fake_codex()),
                 ))
             })),
+            // The real provider inspects the clone in a container; this test
+            // is about config-only workers, so keep it off Docker.
+            workspaces: Some(Arc::new(taskrunner::workspace::clone::CloneWorkspaces::new(
+                &paths.workspaces_dir,
+                Arc::new(ArtifactStore::new(&paths.artifacts_dir)),
+                Arc::new(helpers::DiscardRecorder),
+                Arc::new(taskrunner::workspace::git::HostGit),
+            ))),
             ..Default::default()
         },
     )

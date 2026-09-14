@@ -219,16 +219,14 @@ impl WorkspaceProvider for ProjectRootWorkspaces {
     fn ensure_workspace(&self, _task_id: &str, project_root: &Path) -> Result<PathBuf, ToolError> {
         Ok(project_root.to_path_buf())
     }
-    fn collect_changes(&self, _workspace_dir: &Path) -> Vec<String> {
-        vec![]
-    }
     fn after_turn(
         &self,
         _task_id: &str,
         _turn_id: &str,
         _workspace_dir: &Path,
         _project_root: &Path,
-    ) {
+    ) -> Vec<String> {
+        vec![]
     }
 }
 
@@ -291,5 +289,19 @@ impl WorkerHarness for FakeHarness {
             changed_files: vec![],
             usage: None,
         })
+    }
+}
+
+// ---- workspace test seams -------------------------------------------------
+
+use taskrunner::storage::Recorder;
+
+/// Keeps nothing: for tests that need a workspace provider but assert on the
+/// daemon's own store rather than on what the provider recorded.
+pub struct DiscardRecorder;
+
+impl Recorder for DiscardRecorder {
+    fn record(&self, body: EventBody) -> anyhow::Result<LogEvent> {
+        Ok(LogEvent { id: "evt_discarded".into(), ts: "2026-01-01T00:00:00.000Z".into(), body })
     }
 }

@@ -42,9 +42,18 @@ The worker never touches your actual project directory.
   the worker to see or wreck.
 - **No route back.** The clone's link to your repository is removed, so the worker has
   nothing to push to.
+- **Read back in a sandbox, never on your machine.** When the turn ends, Taskrunner
+  still has to look at the clone: what changed, the diff, the new commits. Git obeys
+  settings stored inside a repository, and some of those settings name a program for
+  git to run — and the turn could have written them. So that inspection runs in its
+  own throwaway container, with no network and nothing of your machine but the clone.
+  Anything planted fires in there and dies with it; your machine only reads the plain
+  files it produced.
 - **Results come back for review.** Work the task commits is fetched into your
-  repository on a branch named after the task. It's never merged, never rebased, never
-  applied to your working tree — you look at it and decide.
+  repository from a bundle — a single file of git objects rather than a repository, so
+  git reads it as data, with its integrity checks switched on. It lands on a branch
+  named after the task: never merged, never rebased, never applied to your working
+  tree — you look at it and decide.
 
 Do note what this *doesn't* hide: a task can read the entire committed history of the
 project you delegated. If a secret was ever committed to that repo, the worker can see

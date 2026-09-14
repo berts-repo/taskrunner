@@ -12,6 +12,7 @@ pub mod ids;
 pub mod ingest;
 pub mod js;
 pub mod paths;
+pub mod process;
 pub mod shim;
 pub mod storage;
 pub mod view;

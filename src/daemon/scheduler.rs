@@ -2,7 +2,7 @@
 //! status unless `wait`; one running turn per task; every turn has a timeout;
 //! networked tasks need a relayed user approval before they run.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -132,6 +132,25 @@ impl RunningTurn {
 pub struct Scheduler {
     deps: Arc<SchedulerDeps>,
     running: Arc<Mutex<HashMap<String, RunningTurn>>>,
+}
+
+/// Both halves of the truth about a turn: a harness lists what its own edit
+/// tool touched, git lists what actually ended up different — a turn that
+/// edits through the shell as well as the tool is only fully described by the
+/// two together. Harness paths can be absolute in the worker's view of the
+/// workspace; git's are relative to it.
+fn merge_changed_files(
+    reported: Vec<String>,
+    observed: Vec<String>,
+    workspace_path: &str,
+) -> Vec<String> {
+    let prefix = format!("{}/", workspace_path.trim_end_matches('/'));
+    let mut merged: BTreeSet<String> = reported
+        .into_iter()
+        .map(|path| path.strip_prefix(&prefix).unwrap_or(&path).to_string())
+        .collect();
+    merged.extend(observed);
+    merged.into_iter().collect()
 }
 
 impl Scheduler {
@@ -412,6 +431,7 @@ impl Scheduler {
             allowed_domains: worker_cfg.allowed_domains.iter().chain(&approved).cloned().collect(),
         });
         let runner = runner_slot.insert(runner);
+        let workspace_path = runner.workspace_path().to_string();
 
         // Streamed into the audit log as they arrive, not buffered, so a
         // crashed turn keeps its partial trail.
@@ -452,7 +472,6 @@ impl Scheduler {
             })?;
         }
 
-        let mut changed_files = result.changed_files;
         let workspaces = self.deps.workspaces.clone();
         let (task, turn, dir, root) = (
             task_id.to_string(),
@@ -460,17 +479,11 @@ impl Scheduler {
             workspace_dir.clone(),
             PathBuf::from(project_root),
         );
-        let fallback_needed = changed_files.is_empty();
-        let fallback = tokio::task::spawn_blocking(move || {
-            let changes = if fallback_needed { workspaces.collect_changes(&dir) } else { vec![] };
-            workspaces.after_turn(&task, &turn, &dir, &root);
-            changes
-        })
-        .await
-        .map_err(|err| ToolError::new(ErrorCode::InternalError, err.to_string()))?;
-        if fallback_needed {
-            changed_files = fallback;
-        }
+        let observed =
+            tokio::task::spawn_blocking(move || workspaces.after_turn(&task, &turn, &dir, &root))
+                .await
+                .map_err(|err| ToolError::new(ErrorCode::InternalError, err.to_string()))?;
+        let changed_files = merge_changed_files(result.changed_files, observed, &workspace_path);
 
         self.deps.store.record(EventBody::TurnCompleted {
             turn_id: entry.turn_id.clone(),

@@ -87,6 +87,7 @@ use crate::storage::store::SharedStore;
 use crate::workers::harness::WorkerHarness;
 use crate::workers::runner::{DockerRunner, DockerRunnerOptions, WorkerRunner};
 use crate::workspace::clone::{CloneWorkspaces, WorkspaceProvider};
+use crate::workspace::git::ContainerGit;
 use scheduler::{MakeRunner, RunnerContext, Scheduler, SchedulerDeps};
 use std::collections::HashMap;
 
@@ -172,6 +173,9 @@ impl Daemon {
                 &paths.workspaces_dir,
                 artifacts.clone(),
                 Arc::new(store.clone()),
+                // Post-turn git runs over a repository a worker controlled,
+                // so it never runs on the host.
+                Arc::new(ContainerGit::new("docker")),
             ))
         });
         let make_runner = options
