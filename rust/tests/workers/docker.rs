@@ -56,7 +56,10 @@ function hit(host, cb) {
 }
 hit("example.com", () => hit("neverallowed.invalid", () => console.log("hi")));
 "#;
-    let spec = WorkerSpawnSpec { argv: vec!["node".into(), "-e".into(), script.into()], env: Default::default() };
+    let spec = WorkerSpawnSpec {
+        argv: vec!["node".into(), "-e".into(), script.into()],
+        env: Default::default(),
+    };
     let mut worker = runner.start(spec).await.unwrap();
     let mut stdout = String::new();
     worker.child.stdout.take().unwrap().read_to_string(&mut stdout).await.unwrap();
