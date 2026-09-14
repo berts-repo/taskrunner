@@ -17,7 +17,10 @@ is visible to it except the one folder Taskrunner mounts.
   the files in the task's workspace.
 - **Never as root.** The worker runs as an unprivileged user, and the container is
   started with privilege escalation switched off — so nothing the turn runs can gain
-  root, even through a setuid binary.
+  root, even through a setuid binary. That user's numeric id rarely matches the id of
+  the person running Taskrunner, so the task's clone (see below) is made writable by
+  anyone before the container starts — safe because the clone is single-use, holds no
+  secrets, and is discarded once the turn's changes land back in your repository.
 - **Bounded resources.** Memory, CPU, and process count are capped (4 GB, 2 CPUs, 512
   processes by default; see [Configuration](configuration.md)). A runaway turn or a
   fork bomb hits a ceiling and Docker stops the container, instead of your machine

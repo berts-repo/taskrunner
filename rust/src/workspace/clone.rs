@@ -76,6 +76,29 @@ impl WorkspaceProvider for CloneWorkspaces {
         // that path is meaningless (and must stay unreachable) inside the
         // container.
         git(&dir, &["remote", "remove", "origin"]);
+        // The container's non-root worker user has a different uid than the
+        // host user who owns this clone (a bind mount keeps host uids, and
+        // the base image's own "node" user often already claims uid 1000),
+        // so every file and dir here looks owned-by-someone-else to the
+        // worker: it can create nothing and edit nothing. World-writable is
+        // fine: this is a disposable, single-task clone with no secrets,
+        // discarded once the turn lands its changes host-side. `o+rwX` (not
+        // `o+rwx`) only adds execute where a file already had one, so plain
+        // files don't spuriously become executable.
+        let chmodded = std::process::Command::new("chmod")
+            .args(["-R", "o+rwX"])
+            .arg(&dir)
+            .output()
+            .map_err(|err| ToolError::new(ErrorCode::InternalError, err.to_string()))?;
+        if !chmodded.status.success() {
+            return Err(ToolError::new(
+                ErrorCode::InternalError,
+                format!(
+                    "failed to make task workspace writable by the container user: {}",
+                    String::from_utf8_lossy(&chmodded.stderr).trim()
+                ),
+            ));
+        }
         Ok(dir)
     }
 
