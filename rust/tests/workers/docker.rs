@@ -37,12 +37,26 @@ async fn runs_a_command_in_a_worker_image_behind_the_proxy_and_cleans_up() {
         docker_command: "docker".into(),
     });
 
-    // One allowed and one refused connection, then a plain echo.
-    let script = "curl -s -o /dev/null -m 5 http://example.com/ ; curl -s -o /dev/null -m 5 http://neverallowed.invalid/ ; echo hi";
-    let spec = WorkerSpawnSpec {
-        argv: vec!["sh".into(), "-c".into(), script.into()],
-        env: Default::default(),
-    };
+    // One allowed and one refused connection, then a plain echo. No worker
+    // image ships curl; every one ships node, but node's own http module does
+    // not honor HTTP_PROXY on its own (real CLIs do their own proxy handling
+    // — out of scope here), so the script reads it and hits the proxy
+    // directly in absolute-form, exactly as a proxy-aware client would.
+    let script = r#"
+const http = require("http");
+const { hostname, port } = new URL(process.env.HTTP_PROXY);
+function hit(host, cb) {
+  const req = http.request(
+    { hostname, port, method: "GET", path: `http://${host}/`, headers: { Host: host } },
+    (res) => { res.resume(); res.on("end", () => cb(res.statusCode)); },
+  );
+  req.on("error", () => cb(null));
+  req.setTimeout(5000, () => req.destroy());
+  req.end();
+}
+hit("example.com", () => hit("neverallowed.invalid", () => console.log("hi")));
+"#;
+    let spec = WorkerSpawnSpec { argv: vec!["node".into(), "-e".into(), script.into()], env: Default::default() };
     let mut worker = runner.start(spec).await.unwrap();
     let mut stdout = String::new();
     worker.child.stdout.take().unwrap().read_to_string(&mut stdout).await.unwrap();
