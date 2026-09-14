@@ -144,7 +144,7 @@ fn clock(native_ts: Option<&str>) -> String {
 
 fn compact_line(m: &TranscriptMessage) -> String {
     let ts = m.native_ts.as_deref().map_or(String::new(), |ts| format!("{ts}  "));
-    format!("  {ts}{}/{}  {}", m.role, m.kind, compact_message_content(&m.content))
+    format!("  {ts}{}/{}  {}", display_role(m), m.kind, compact_message_content(&m.content))
 }
 
 /// One header line per message followed by its body. The prompt index is
@@ -172,12 +172,42 @@ fn timeline_lines(messages: &[TranscriptMessage], tool_lines: usize) -> Vec<Stri
 }
 
 fn header_label(m: &TranscriptMessage) -> String {
+    let role = display_role(m);
     match m.kind.as_str() {
-        "tool_use" => format!("{} · {}", m.role, m.tool_name.as_deref().unwrap_or("tool")),
+        "tool_use" => format!("{role} · {}", m.tool_name.as_deref().unwrap_or("tool")),
         "tool_result" => format!("tool · result{}", if m.is_error == Some(1) { " ✗" } else { "" }),
-        "message" => m.role.clone(),
-        kind => format!("{} · {kind}", m.role),
+        "message" => role,
+        kind => format!("{role} · {kind}"),
     }
+}
+
+/// A transcript's role says only "assistant". The ingest source records which
+/// harness wrote the reply, and in an archive that mixes harnesses that is the
+/// name worth reading.
+fn display_role(m: &TranscriptMessage) -> String {
+    if m.role == "assistant" { harness_name(&m.source) } else { m.role.clone() }
+}
+
+/// Sources are free-form, so a name is its words capitalised; only the names
+/// that rule gets wrong are listed.
+fn harness_name(source: &str) -> String {
+    match source {
+        "claude-code" => "Claude".into(),
+        "openclaw" => "OpenClaw".into(),
+        _ => {
+            let words: Vec<String> = source
+                .split(|c: char| c == '-' || c == '_' || c.is_whitespace())
+                .filter(|word| !word.is_empty())
+                .map(capitalise)
+                .collect();
+            if words.is_empty() { "Assistant".into() } else { words.join(" ") }
+        }
+    }
+}
+
+fn capitalise(word: &str) -> String {
+    let mut chars = word.chars();
+    chars.next().map_or(String::new(), |first| first.to_uppercase().chain(chars).collect())
 }
 
 /// What the conversation said is never clipped: the user's prompts, the

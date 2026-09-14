@@ -81,7 +81,7 @@ describe("lookup-task include transcript (Part A)", () => {
 
     expect(out).toContain("transcript:");
     const userAt = out.indexOf("please build the widget");
-    const toolAt = out.indexOf("assistant/tool_use");
+    const toolAt = out.indexOf("Codex/tool_use");
     const doneAt = out.indexOf("done building the widget");
     expect(userAt).toBeGreaterThan(-1);
     expect(toolAt).toBeGreaterThan(-1);
@@ -108,7 +108,7 @@ describe("lookup-task include transcript (Part A)", () => {
     expect(out).toContain("[1]");
     expect(out).toContain("Bash");
     // An outline names the call but never loads its payload or its result.
-    expect(out).not.toContain("assistant/tool_use");
+    expect(out).not.toContain("Codex/tool_use");
   });
 
   it("reports the empty state for a task with no transcript", () => {

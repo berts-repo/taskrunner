@@ -198,6 +198,8 @@ export function getTurnArtifacts(index: StateIndex, turnId: string): ArtifactHan
 // tool_* and prompt_idx columns are projection-time facts (see message-facts.ts),
 // carried here so a renderer never has to re-parse the content blob.
 export interface TranscriptMessage {
+  /** Ingest source, retained so the reader can name the harness that replied. */
+  source: string;
   role: string;
   kind: string;
   content: string;
@@ -223,7 +225,7 @@ export interface MessageQuery {
   promptIdx?: number;
 }
 
-const MESSAGE_COLUMNS = `role, kind, content, native_ts, native_session_id,
+const MESSAGE_COLUMNS = `source, role, kind, content, native_ts, native_session_id,
                          prompt_idx, tool_name, tool_target, is_error`;
 
 /** `LIMIT -1` is SQLite's "no limit"; the +1 probe detects a truncated read. */

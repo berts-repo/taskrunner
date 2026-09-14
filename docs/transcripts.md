@@ -74,6 +74,9 @@ capped so it stays readable. A person at a shell wants to read; an agent scannin
 wants the outline, because it pays for every line it takes in. Same archive, same
 numbering, different starting point.
 
+Reply and tool-call labels name the harness that wrote them — for example, Claude,
+Codex, Hermes, or OpenClaw — using the source stored with each archived message.
+
 ```sh
 taskrunner sessions                          # your recent sessions, newest first
 taskrunner sessions --project /path          # just this project

@@ -228,6 +228,8 @@ pub fn get_turn_artifacts(
 /// carried here so a renderer never has to re-parse the content blob.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptMessage {
+    /// Ingest source, kept so a reader can name the harness that replied.
+    pub source: String,
     pub role: String,
     pub kind: String,
     pub content: String,
@@ -272,20 +274,21 @@ pub struct MessagePage {
     pub capped: bool,
 }
 
-const MESSAGE_COLUMNS: &str = "role, kind, content, native_ts, native_session_id,
+const MESSAGE_COLUMNS: &str = "source, role, kind, content, native_ts, native_session_id,
                                prompt_idx, tool_name, tool_target, is_error";
 
 fn message_from_row(row: &Row) -> rusqlite::Result<TranscriptMessage> {
     Ok(TranscriptMessage {
-        role: row.get(0)?,
-        kind: row.get(1)?,
-        content: row.get(2)?,
-        native_ts: row.get(3)?,
-        native_session_id: row.get(4)?,
-        prompt_idx: row.get(5)?,
-        tool_name: row.get(6)?,
-        tool_target: row.get(7)?,
-        is_error: row.get(8)?,
+        source: row.get(0)?,
+        role: row.get(1)?,
+        kind: row.get(2)?,
+        content: row.get(3)?,
+        native_ts: row.get(4)?,
+        native_session_id: row.get(5)?,
+        prompt_idx: row.get(6)?,
+        tool_name: row.get(7)?,
+        tool_target: row.get(8)?,
+        is_error: row.get(9)?,
     })
 }
 

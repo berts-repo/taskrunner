@@ -135,11 +135,37 @@ fn renders_compact_lines_in_the_pre_phase_2_shape() {
 #[test]
 fn labels_a_tool_call_by_name_and_shows_its_target_and_remaining_input() {
     let out = timeline(&seeded());
-    assert!(out.contains("── assistant · Read"));
+    assert!(out.contains("── Claude · Read"));
     assert!(out.contains("/repo/a.ts"));
-    assert!(out.contains("── assistant · Bash"));
+    assert!(out.contains("── Claude · Bash"));
     assert!(out.contains("ls -la"));
     assert!(out.contains("description: list the tree"));
+}
+
+#[test]
+fn attributes_replies_to_the_harness_that_wrote_each_archived_session() {
+    for (source, name) in [
+        ("claude-code", "Claude"),
+        ("codex", "Codex"),
+        ("hermes", "Hermes"),
+        ("openclaw", "OpenClaw"),
+    ] {
+        let s = Seed::new();
+        let reply = Msg {
+            source,
+            session: "sess-T",
+            record_id: "r1".into(),
+            role: "assistant",
+            kind: "message",
+            content: "a reply".into(),
+            native_ts: Some(s.ts()),
+            project_path: Some("/repo"),
+        }
+        .body();
+        let out = timeline(&s.index(vec![project_created(), reply]));
+        assert!(out.contains(&format!("── {name}")), "{source}: {out}");
+        assert!(!out.contains("── assistant"), "{source}: {out}");
+    }
 }
 
 #[test]

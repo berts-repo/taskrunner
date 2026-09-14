@@ -110,7 +110,7 @@ function clock(nativeTs: string | null): string {
 function compactLines(messages: TranscriptMessage[]): string[] {
   return messages.map((m) => {
     const ts = m.native_ts ? `${m.native_ts}  ` : "";
-    return `  ${ts}${m.role}/${m.kind}  ${compactMessageContent(m.content)}`;
+    return `  ${ts}${displayRole(m)}/${m.kind}  ${compactMessageContent(m.content)}`;
   });
 }
 
@@ -135,9 +135,34 @@ function timelineLines(messages: TranscriptMessage[], toolLines: number): string
 }
 
 function headerLabel(m: TranscriptMessage): string {
-  if (m.kind === "tool_use") return `${m.role} · ${m.tool_name ?? "tool"}`;
+  if (m.kind === "tool_use") return `${displayRole(m)} · ${m.tool_name ?? "tool"}`;
   if (m.kind === "tool_result") return `tool · result${m.is_error === 1 ? " ✗" : ""}`;
-  return m.kind === "message" ? m.role : `${m.role} · ${m.kind}`;
+  const role = displayRole(m);
+  return m.kind === "message" ? role : `${role} · ${m.kind}`;
+}
+
+/** The transcript role says only "assistant". The source records which
+ * harness wrote it, so use that durable attribution in every rendered view. */
+function displayRole(m: TranscriptMessage): string {
+  return m.role === "assistant" ? harnessName(m.source) : m.role;
+}
+
+function harnessName(source: string): string {
+  const known: Record<string, string> = {
+    "claude-code": "Claude",
+    claude: "Claude",
+    codex: "Codex",
+    hermes: "Hermes",
+    openclaw: "OpenClaw",
+    "open-claw": "OpenClaw",
+  };
+  const normalized = source.toLowerCase();
+  if (known[normalized]) return known[normalized];
+  return source
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ") || "Assistant";
 }
 
 /**

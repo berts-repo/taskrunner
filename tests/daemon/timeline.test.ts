@@ -21,13 +21,15 @@ function msg(over: {
   kind?: string;
   content: string;
   session?: string;
+  source?: string;
 }): EventBody {
   seq += 1;
   const native_session_id = over.session ?? "sess-T";
+  const source = over.source ?? "claude-code";
   return {
     type: "message.recorded",
-    message_id: `msg:claude-code:${native_session_id}:r${seq}`,
-    source: "claude-code",
+    message_id: `msg:${source}:${native_session_id}:r${seq}`,
+    source,
     native_session_id,
     native_record_id: `r${seq}`,
     role: over.role ?? "assistant",
@@ -113,11 +115,28 @@ describe("timeline view", () => {
   it("labels a tool call by name and shows its target and remaining input", () => {
     const index = seeded();
     const out = lookupSession(index, { sessionId: "sess-T", view: "timeline" });
-    expect(out).toContain("── assistant · Read");
+    expect(out).toContain("── Claude · Read");
     expect(out).toContain("/repo/a.ts");
-    expect(out).toContain("── assistant · Bash");
+    expect(out).toContain("── Claude · Bash");
     expect(out).toContain("ls -la");
     expect(out).toContain("description: list the tree");
+  });
+
+  it("attributes replies to the harness that wrote each archived session", () => {
+    for (const [source, name] of [
+      ["claude-code", "Claude"],
+      ["codex", "Codex"],
+      ["hermes", "Hermes"],
+      ["openclaw", "OpenClaw"],
+    ]) {
+      const index = indexOf([
+        { type: "project.created", project_id: "p1", root: "/repo" },
+        msg({ source, session: `${source}-session`, content: "a reply" }),
+      ]);
+      const out = lookupSession(index, { sessionId: `${source}-session`, view: "timeline" });
+      expect(out).toContain(`── ${name}`);
+      expect(out).not.toContain("── assistant");
+    }
   });
 
   it("marks a failed tool result and not a successful one", () => {

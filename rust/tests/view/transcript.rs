@@ -193,7 +193,7 @@ fn renders_the_tasks_worker_transcript_in_order_compacting_a_tool_payload() {
 
     assert!(out.contains("transcript:"));
     let user_at = out.find("please build the widget").unwrap();
-    let tool_at = out.find("assistant/tool_use").unwrap();
+    let tool_at = out.find("Codex/tool_use").unwrap();
     let done_at = out.find("done building the widget").unwrap();
     // Chronological: user message, then tool_use, then final assistant message.
     assert!(user_at < tool_at);
@@ -220,7 +220,7 @@ fn outlines_the_worker_interior_when_no_view_is_asked_for() {
     assert!(out.contains("[1]"));
     assert!(out.contains("Bash"));
     // An outline names the call but never loads its payload or its result.
-    assert!(!out.contains("assistant/tool_use"));
+    assert!(!out.contains("Codex/tool_use"));
 }
 
 #[test]
