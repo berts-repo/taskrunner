@@ -3,6 +3,7 @@
 //! a command, positionals, and `--key value` flags anywhere.
 
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -101,10 +102,16 @@ async fn read_query(
     .await
     {
         Ok(res) => {
-            print!(
-                "{}",
-                if res.body.ends_with('\n') { res.body.clone() } else { format!("{}\n", res.body) }
-            );
+            let body =
+                if res.body.ends_with('\n') { res.body.clone() } else { format!("{}\n", res.body) };
+            // A reader that stops early (`| head`) closes the pipe. That is its
+            // choice, not our failure — and `print!` would panic on it — so the
+            // write ignores exactly that error and the query keeps its exit code.
+            let mut stdout = io::stdout().lock();
+            match stdout.write_all(body.as_bytes()).and_then(|()| stdout.flush()) {
+                Err(err) if err.kind() != io::ErrorKind::BrokenPipe => return Err(err.into()),
+                _ => {}
+            }
             Ok(if res.ok() { 0 } else { 1 })
         }
         Err(_) => {

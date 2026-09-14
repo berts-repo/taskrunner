@@ -99,6 +99,36 @@ async fn serves_read_only_query_routes_over_the_socket() {
 }
 
 #[tokio::test]
+async fn a_query_command_exits_cleanly_when_its_reader_closes_the_pipe() {
+    let (_dir, paths) = short_root();
+    let daemon = start(&paths).await;
+    daemon
+        .record(EventBody::ProjectCreated { project_id: "p1".into(), root: "/repo".into() })
+        .unwrap();
+    daemon.record(message_recorded()).unwrap();
+
+    // The read end is closed before the CLI starts, so its first write fails with
+    // a broken pipe — what `taskrunner session … | head` hits once head exits.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    // spawn, not output(): output() swaps in its own stdout pipe.
+    let out = tokio::process::Command::new(taskrunner_bin())
+        .args(["sessions", "--state-root"])
+        .arg(&paths.root)
+        .stdout(writer)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .await
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "stderr: {stderr}");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn refuses_a_second_daemon_on_the_same_state_root() {
     let (_dir, paths) = short_root();
     let first = start(&paths).await;

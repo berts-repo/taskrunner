@@ -221,9 +221,12 @@ index, and a partial one would be a lie.) A person at a shell wants to read; an 
 scanning pays for every line it takes in — so the two surfaces never have to agree. An
 explicit `last` always wins.
 
-One incidental hazard worth keeping: the CLI has no boolean flags, because a bare
+Two incidental hazards worth keeping: the CLI has no boolean flags, because a bare
 `--failed` would swallow the next argv entry as the query (`--failed true|false` takes
-a value).
+a value); and `read_query` in `src/cli.rs` writes output itself, ignoring a broken
+pipe, because `print!` panics when a timeline-sized result is piped to `head` and the
+reader exits early. Only the CLI does this — the daemon shares the binary, and must
+never be taken down by a client hanging up.
 
 ### Sweeper invariants (load-bearing)
 
