@@ -23,9 +23,18 @@ maintainer reference — the "why it's built this way" behind the features descr
 
 ## Daemon, shim, and the socket
 
-- The `mcp` command is a thin stdio shim. It forwards to a single daemon over a unix
-  socket under the state root, auto-starting the daemon if needed, so any number of
-  MCP clients share one daemon.
+- The `mcp` command is a thin stdio shim. It pumps the client's stdio byte for byte
+  to one daemon's `runtime/mcp.sock`, auto-starting the daemon if needed, so any
+  number of MCP clients share one daemon.
+- **A connection is a session.** Each connection gets its own MCP service and its own
+  `session.started`/`session.ended` records. MCP protocol `2026-07-28` removes
+  protocol-level sessions, so the session record can't lean on the SDK's HTTP session
+  manager.
+- A second socket, `runtime/daemon.sock`, serves HTTP: `/status` and the read-only
+  query routes the CLI uses.
+- **The tool contract is data.** `src/daemon/tools.json` holds the six tools' names,
+  descriptions and input schemas, served verbatim and used to validate every call.
+  Invalid arguments are a protocol error: the tool never runs and nothing is audited.
 - **`sun_path` limit.** A unix socket path is capped around 104 bytes on macOS. State
   roots with long paths fail fast with a clear error rather than a confusing bind
   failure; tests and any throwaway state roots must use short paths.
@@ -75,14 +84,14 @@ table for search.
   `(source, native_session_id, native_record_id)`, so re-sweeping a record re-emits
   the same event and `INSERT OR IGNORE` keeps `messages` clean. **The FTS table has no
   such guard**, so the fold inserts into `messages_fts` only when the `messages`
-  insert actually changed a row (`res.changes > 0`) — otherwise a rebuild would
+  insert actually changed a row (the insert's changed-row count) — otherwise a rebuild would
   double-index every re-swept message.
 - **Byte offsets are a cache only.** `~/.taskrunner/ingest-state.json` records how far
   each source was read to make resumption incremental; deleting it forces a harmless
   full re-scan, and the event log stays the sole source of truth.
 - **Session aggregate.** A `transcript_sessions` table holds one row per distinct
   `(source, native_session_id)` — project, first/last timestamp, message count —
-  maintained by the same `message.recorded` fold, **inside the same `res.changes > 0`
+  maintained by the same `message.recorded` fold, **inside the same inserted-a-row
   guard** as the FTS insert so a re-swept message never double-counts. It exists so
   listing sessions by recency is O(sessions) rather than a `GROUP BY` over all of
   `messages`; recency orders by `COALESCE(last_ts, last_recorded_at)` (formats without
@@ -91,10 +100,10 @@ table for search.
 
 ### Message facts (schema v7)
 
-`message-facts.ts` promotes a handful of objective facts out of each message's
+`storage/facts.rs` promotes a handful of objective facts out of each message's
 content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
 `is_error`, and the `prompt_idx` an exchange is addressed by. This is what turns
-"every Edit under `src/shim`" into a query instead of a grep over JSON.
+"every Edit under `src/daemon`" into a query instead of a grep over JSON.
 
 - **Only unambiguous facts get promoted.** They are re-derived on every rebuild, so a
   wrong call here costs a delete-and-rebuild rather than a migration — but it also
@@ -124,7 +133,7 @@ content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
 - **Everything before a session's first real prompt stays at 0**, which is why the
   outline has a `[0] (before the first prompt)` group at all.
 - **The counter is read before the insert and committed only if the insert changed a
-  row** — inside the same `res.changes > 0` guard as the FTS insert and the session
+  row** — inside the same inserted-a-row guard as the FTS insert and the session
   aggregate, so a re-swept duplicate can never advance the numbering.
 
 ### Query surface
@@ -135,11 +144,11 @@ content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
   `messages` keyed on `(source, native_session_id)` — so a host session no task links
   is still readable. A bare id matching several sources lists candidates rather than
   guessing.
-- **Scoped `search-transcripts`.** `searchMessages` builds its `WHERE` dynamically over
+- **Scoped `search-transcripts`.** `search_messages` builds its `WHERE` dynamically over
   `messages_fts` (still `messages_fts MATCH ?` even when aliased) joined 1:1 to
   `messages` on the unique `message_id` — the join is what carries `project_path` into
   a hit and lets `project` filter. `sessions`/`lastSessions` add `native_session_id IN
-  (…)` (the latter resolved through `listSessions`); `role`/`kind`/`since`/`until`
+  (…)` (the latter resolved through `list_sessions`); `role`/`kind`/`since`/`until`
   filter the FTS row's UNINDEXED columns; `sort:"recent"` orders by `native_ts` instead
   of `rank`.
 - **Filter-only search.** With no `query` the same function drops the FTS
@@ -155,7 +164,7 @@ content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
   failure would be reported twice. Deliberately **not** applied when there is a text
   query: there the caller asked for whichever record their words appear in. Results
   stating no outcome are NULL and so fall out of `failed:true` *and* `failed:false`.
-- **On-demand host sweep.** Session-recency queries call `sweep({ hostOnly: true })`
+- **On-demand host sweep.** Session-recency queries call `sweep` with `host_only`
   first — it skips volume sources (no `docker cp`), so the newest host session reflects
   the live conversation without paying for a worker-volume copy-out. Coalescing is
   first-caller-wins; the interval sweep still reaches the volumes.
@@ -166,9 +175,9 @@ content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
 
 ### Rendering: the three views
 
-`transcript-view.ts` owns all three renderers plus the compact-line helpers moved out
-of `lookup.ts` (which still uses them for audit/trace rows, so the import direction is
-lookup → transcript-view; reversing it makes a cycle).
+`view/transcript.rs` owns all three renderers plus the compact-line helpers, which
+`view/lookup.rs` also uses for audit/trace rows — so the dependency runs lookup →
+transcript, never back.
 
 - **`outline`** — the session as an index: a counts line, then one block per exchange
   headed by its `[N]` address, one line per reply and per tool call. Every call gets a
@@ -196,13 +205,13 @@ harness wrote. Measured on a 240-message session: outline 13k bytes, compact 47k
 timeline 123k. The `[0]` heading is deferred until something files under it, and must
 be cleared when a new group opens or it leaks into the next one.
 
-**View resolution is what made the default flip safe.** `resolveView`: an explicit
+**View resolution is what made the default flip safe.** `resolve_view`: an explicit
 `view` wins; else `prompt N` → `timeline` (drilling into one exchange means reading
 it); else `last` → `compact` (a bounded message read, exactly as before); else
 `outline`. Without those two carve-outs, changing the default would have silently
 changed every existing caller. The drill-down selector is `prompt` on the MCP wire and
-`--prompt N` on the CLI, mapped to `promptIdx` internally (`viewArgs` in
-`mcp-server.ts`) because `prompt` already means the worker instruction on `assign-task`.
+`--prompt N` on the CLI, mapped to `prompt_idx` internally (in
+`daemon/tools.rs`) because `prompt` already means the worker instruction on `assign-task`.
 
 **Defaults are split by surface on purpose.** The CLI defaults to `timeline` with no
 message cap (`limit: null` → `LIMIT -1`) and always sends `view` explicitly; the MCP
@@ -212,26 +221,23 @@ index, and a partial one would be a lie.) A person at a shell wants to read; an 
 scanning pays for every line it takes in — so the two surfaces never have to agree. An
 explicit `last` always wins.
 
-Two incidental hazards worth keeping: the CLI's `BOOLEAN_FLAGS` table is gone, because
-a bare `--failed` would swallow the next argv entry as the query (`--failed true|false`
-takes a value); and `src/cli.ts` guards EPIPE at the bottom, latent before but
-unavoidable once output is timeline-sized and piped to `head`/`less`.
+One incidental hazard worth keeping: the CLI has no boolean flags, because a bare
+`--failed` would swallow the next argv entry as the query (`--failed true|false` takes
+a value).
 
 ### Sweeper invariants (load-bearing)
 
 These were paid for in real bugs; a "simplification" reintroduces them.
 
-- **Everything the sweeper calls is async and yields.** A synchronous first sweep once
-  blocked the event loop ~375s on a real corpus, so the daemon never became ready
-  within the shim's 10s window. `startSweeping()` runs *after* `server.listen()`, and
-  `runSweep`/`sweepFile` yield via `setImmediate` on a **50ms time budget** — a time
-  budget, not a line count, because a single Codex rollout record can carry an entire
-  tool payload. Phase 2's synchronous `docker cp` reintroduced the same stall through
-  a different door and had to be made async too.
-- **`flush()` immediately before `saveState()` in `runSweep`.** Ingest opts out of
+- **The sweep never runs where requests are served.** A first sweep once blocked the
+  daemon ~375s on a real corpus, so it never became ready within the shim's 10s
+  window. Sweeping starts only after the sockets are listening, and each sweep —
+  `docker cp` copy-out included — runs on a blocking thread (`spawn_blocking` in
+  `daemon/sweep_gate.rs`), so a backfill of any size can't delay a request.
+- **`flush()` immediately before `save_state()` in `Sweeper::sweep`.** Ingest opts out of
   per-record fsync (fsync cost ~28.5ms/record dominated the backfill); offsets must
   never advance past durably-logged records, or a lost tail plus an advanced offset
-  means dedupe never re-reads those messages. Do not reorder those two lines.
+  means dedupe never re-reads those messages. Do not reorder them.
   Lifecycle events stay fsynced because they are authoritative and not reconstructible;
   `message.recorded` is derived from transcripts ingest never modifies, so a lost tail
   is re-readable work rather than data loss.

@@ -27,7 +27,7 @@ back to API-key mode).
 ## Steps
 
 1. Ensure images exist: `docker image inspect taskrunner/codex-worker`
-   (build with `npm run build:images` if missing).
+   (build with `sh scripts/build-images.sh` if missing).
 2. Give the user the command for the worker in question, to run in a real
    terminal (`-it` fails under the `!` session prefix — no TTY):
 

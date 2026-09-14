@@ -11,8 +11,8 @@ Reading a session from the terminal means typing its full 36-character id:
 taskrunner session aa1314ca-bb13-4b91-b4b0-b225a575df3e
 ```
 
-Resolution is exact-match only today — `src/storage/index.ts:472` compares
-`native_session_id = ?`, so `taskrunner session aa1314ca` fails with
+Resolution is exact-match only today — `list_sessions` in `src/domain/tasks.rs`
+compares `native_session_id = ?`, so `taskrunner session aa1314ca` fails with
 `error not_found`. There is no shorter way in.
 
 This is a human-at-the-shell problem specifically. Agents over MCP copy-paste

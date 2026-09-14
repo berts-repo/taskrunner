@@ -2,24 +2,30 @@
 
 ## Requirements
 
-- **Node 22+**
+- **Rust** (stable, via [rustup](https://rustup.rs)) — to build Taskrunner
 - **Docker** (running)
+- **Node 22+** — only to run the test suite
 
 ## Install and build
 
 ```sh
-npm install
-npm run build           # compile Taskrunner
-npm run build:images    # build the worker and firewall Docker images
+cargo build --release        # compile Taskrunner: one binary, target/release/taskrunner
+sh scripts/build-images.sh   # build the worker and firewall Docker images
+ln -s "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner   # put it on your PATH
 ```
 
 ## Register with your agent
 
-Point your MCP client at Taskrunner's `mcp` command. For Claude Code:
+Point your MCP client at Taskrunner's `mcp` command. Each agent keeps its own list of
+MCP servers, so register with every agent you use:
 
 ```sh
-claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js mcp
+claude mcp add --scope user taskrunner -- "$HOME/.local/bin/taskrunner" mcp   # Claude Code
+codex mcp add taskrunner -- "$HOME/.local/bin/taskrunner" mcp                 # Codex
 ```
+
+Agents start their MCP servers when a session opens, so a session that was already
+running won't see Taskrunner until you restart it.
 
 Taskrunner runs as a background daemon that starts on demand and keeps all its state
 under `~/.taskrunner/`. You don't start it yourself — your agent's first request
@@ -68,13 +74,17 @@ from your shell (see [Conversation archive](transcripts.md#from-the-terminal)). 
 ## Run the tests (optional)
 
 ```sh
-npm test
+cargo test
 ```
 
-There's also a live check that delegates a real task to codex (needs a codex login):
+Node must be on your PATH: the stand-in codex and claude workers the tests drive, and
+the firewall proxy with its tests, are Node scripts.
+
+There's also a live check that runs a real worker container behind the real firewall
+proxy (needs Docker and the images built):
 
 ```sh
-TASKRUNNER_LIVE_CODEX=1 npx vitest run tests/workers/integration.test.ts
+TASKRUNNER_LIVE_DOCKER=1 cargo test --test workers docker
 ```
 
 Next: [Using Taskrunner](tools.md).

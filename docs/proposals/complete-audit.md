@@ -52,7 +52,7 @@ file ingestion everywhere else; both feed one archive.
 Wire capture, on by default. The egress proxy already stands between every worker
 container and the world; it grows from "CONNECT and forward" to "terminate, record,
 re-encrypt." Taskrunner generates the CA once and bakes it into the worker images at
-`npm run build:images`. Zero setup for the user, and it covers the part of the audit
+`scripts/build-images.sh`. Zero setup for the user, and it covers the part of the audit
 only taskrunner can see — every tool call inside a delegated turn.
 
 ### Host sessions (the harness you talk to)
@@ -130,10 +130,11 @@ to a second file every N events; stronger anchors (a git commit, a line in a
 notebook, a friend's copy) are the user's choice. The chain proves a record has not
 changed since it was written — not that it was true when written.
 
-Starts with the Rust port, which rewrites the event writer anyway. Adding it later
-would leave the old history as a permanent "trust me" zone or require re-hashing it
-— exactly the act the chain exists to make suspicious. Cost: one field per line,
-under 5% of the log.
+It was to start with the Rust port; the port shipped without it, because formats
+were frozen for the port, so it is now the redesign's first change to the event
+writer. Every event written before then is unchained history — a "trust me" zone
+that grows until chaining starts, and re-hashing it later is exactly the act the
+chain exists to make suspicious. Cost: one field per line, under 5% of the log.
 
 ## Decided: every harness is both a host and a worker
 
@@ -347,214 +348,6 @@ one): don't full-text index thinking blocks (the largest single item and the lea
 searchable); store large tool results once by content hash; raise `hot_days` only
 as far as search stays useful.
 
-## Rust port — before the redesign
-
-Decided 2026-09-13: taskrunner moves to Rust, and the port happens *before* the
-redesign above. Reason: the redesign is additive around a core that survives — log
-and index, scheduler, runner, harnesses, parsers, MCP tools, CLI all stay; only the
-egress proxy is replaced and the rest is new. Porting the core first means the new
-pieces are written once, in the final language, on a floor already proven equal to
-today's system. Rust is also the stronger tool for the hardest new piece (the
-TLS-terminating proxy: `rustls`, `hyper`, `rcgen`), and it ships as one binary — the
-"download one file" install a non-technical user needs.
-
-**Port means the same program.** Same commands, same files on disk, same behaviour.
-Not better, not redesigned. That is what makes it checkable.
-
-### Frozen during the port
-
-- `~/.taskrunner/events.jsonl` — the existing archive must load unchanged.
-- `config.toml` — same keys, same defaults.
-- MCP tool names and arguments; CLI commands and output.
-- Test fixtures (sample Claude/Codex transcripts) — reused as-is.
-- Docker images — they run `claude`/`codex`, not taskrunner. Untouched.
-
-### Order — bottom up, each layer green before the next
-
-One module, one PR, tests green per step. The old egress proxy
-(`docker/egress-proxy/server.cjs`) is *not* ported — it runs in its own image and is
-replaced in the redesign. Rust lives in `rust/` (one crate, `lib.rs` + `main.rs`,
-modules named after the TypeScript directories, tests under `rust/tests/`) until the
-TypeScript is deleted, then moves to the root. Each step ticks its line here when it
-lands.
-
-**What the code says that this list originally missed.** There was no
-`events.jsonl` on the author's machine — the corpus has to be built first. The
-transcript fixtures are inline strings in the tests, not files. There are no
-container integration tests: `tests/workers/integration.test.ts` drives a fake
-`codex` script through `LocalRunner`, and the Docker runner is tested only at the
-argv level. The query and rendering side (`domain/tasks`, `daemon/lookup`,
-`daemon/transcript-view`, `render` — ~1,500 lines, ~1,000 lines of exact-string
-tests) sits on the index and is part of step 1. The shim↔daemon transport is
-internal, not frozen.
-
-0. **Spike and corpus.** `rustup`; a `rust/` skeleton; confirm `rmcp` serves
-   Streamable HTTP on a unix socket (it ships `transport-io`,
-   `transport-streamable-http-server`, `transport-streamable-http-client-unix-socket`
-   and `schemars`; `libsqlite3-sys` bundled enables FTS5). Build the corpus: run the
-   TypeScript daemon once so it sweeps `~/.claude/projects`, and drive one task
-   (assign, continue, cancel) through the real scheduler so the log holds every
-   event kind; freeze the log outside git. `scripts/parity-index.sh <events.jsonl>`
-   refolds the log with both implementations and diffs `sqlite3` dumps of every
-   table ordered by primary key (FTS shadow tables skipped) — the `sqlite3` CLI is
-   the neutral witness. Decision: keep HTTP on the socket; the shim stays a dumb
-   forwarder. **Done 2026-09-13.** Spike findings: rmcp serves over a unix socket
-   through `axum::serve(UnixListener, …)` and needs `allowed_hosts` set (its
-   DNS-rebinding guard rejects a non-loopback `Host`); its unix-socket client
-   round-trips `initialize`/`tools/list`/`tools/call`; `schemars` emits
-   draft-2020-12 schemas where zod emits draft-07 with `additionalProperties:
-   false` — a known step-7 difference. Corpus: 2,396 messages from the real host
-   transcripts plus five tasks driven through the real scheduler with the fake
-   codex (Docker was down) and two MCP sessions; frozen at
-   `~/.taskrunner/corpus/events.jsonl`.
-1. **Storage** — two PRs. *1a* `ids`, `storage/{events,facts,index,artifacts}`:
-   the 16 event bodies as a `type`-tagged enum, torn-tail stop and repair, fsync
-   and the bulk path, schema v7 verbatim, `apply`/`rebuild`/`turn_for`. Tests
-   `events`, `index` (9), `message-facts`, `artifacts` ported 1:1. *Check:*
-   `parity-index.sh` on the corpus prints nothing. Known traps: `ts` must be JS's
-   `toISOString()` shape (`…T10:00:00.000Z`) because timestamps are compared as
-   text in SQL; `serde_json` needs `preserve_order` or every `payload` row differs;
-   JS prints `1.0` as `1`. *1b* `domain/{tasks,projects,policy}`,
-   `view/{transcript,render}`, `lookup`. Tests `outline`, `timeline`, `transcript`,
-   `lookup`, `policy` ported as-is — they already assert exact strings and *are* the
-   golden master; `insta` is for new tests only. **1a done 2026-09-13**: parity on
-   the corpus is empty (2,411 messages, every table); 26 tests; the JS-vs-Rust
-   traps above were handled in `facts.rs` (JS whitespace class, UTF-16 slicing,
-   number printing) and none showed in the diff. **1b done 2026-09-13**: 66 more
-   tests; `scripts/parity-views.sh` renders 58 views over the corpus (session
-   list, outlines, compact and timeline reads, searches, task lookups) with both
-   implementations and diffs empty — 587 KB byte for byte. The lookup-task test
-   seeds the events the scheduler wrote into the corpus instead of driving the
-   scheduler; step 6 adds the stack-driven version. `render.ts` (tool outcome
-   text) moves to step 6 with the scheduler result it renders. `parity-views`
-   is retired when step 7's `parity-cli` covers the same ground.
-2. **Ingest.** First a TypeScript PR that moves the inline sample lines into
-   `tests/fixtures/{claude-code,codex}/*.jsonl` (no behaviour change). Then
-   `ingest/{parser,claude_code,codex,registry,sweep,volume}`. The sweep runs on
-   `spawn_blocking`, so the 50 ms yield in `sweep.ts` has no equivalent — the
-   invariant it protected (daemon answers within the shim's 10 s during a backfill)
-   is kept by the runtime, and the test is restated that way. `flush()` before
-   `save_state()` stays. *Check:* parser tests (fixtures in, same messages out), the
-   11 sweep cases, `volume`; and a fresh Rust sweep of the same host directories
-   refolded and diffed against the corpus with ids and `*_recorded_at` projected
-   out. **Done 2026-09-13.** The fixture PR also wrote an `expected.json` per
-   fixture (by the TypeScript parser) that both languages' parser tests assert
-   against. The corpus-scale check became `scripts/parity-sweep.sh`: both
-   sweepers over a snapshot of the real host directories (23 MB, 45 files), the
-   two logs diffed with `id`/`ts` removed — 2,560 events, identical and in the
-   same order. One real difference surfaced and was fixed: file order, where
-   `Array.sort()` compares whole path strings and `PathBuf` compares components.
-   32 tests; the fold now uses cached prepared statements.
-3. **Config and paths.** serde + `toml`, defaults per worker, `[worker.<name>]`
-   catch-all as a flattened map, `deny_unknown_fields` on ingest sources only.
-   `paths`, `expand_home`, and the harness tables moved out of `daemon.ts`
-   (`HARNESS_KINDS`, `AUTH_MOUNTS`, `DEFAULT_IMAGES`, `TRANSCRIPT_SUBDIR/FORMAT`,
-   `ingestSources`, `buildHarnesses`). *Check:* there is no `config.test.ts`, so a
-   five-line TypeScript script prints `JSON.stringify(loadConfig(f))` for a handful
-   of sample files (empty, custom worker, oss worker, extra source, bad key) and the
-   Rust binary prints the same; diff. Plus `harnesses.test` and a strict-rejection
-   test. **Done 2026-09-13.** `scripts/parity-config.sh` over six samples in
-   `tests/fixtures/config/` (empty, custom worker, oss worker, extra source,
-   two that must fail) is empty. The harness tables live in `harnesses.rs`;
-   `build_harnesses` itself waits for the harnesses in step 5. 10 tests.
-4. **Daemon and socket.** Lock via `hard_link`, the boot order (repair → rebuild →
-   recover crashed turns → listen → chmod 0600 → reap copy-out containers → sweep),
-   `/status`, the read routes, MCP sessions recording `session.started/ended` with
-   **no tools yet**, sweep timer, `stop()` in today's order. The shim and
-   `up`/`down`/`status` land here — the daemon is untestable from outside without
-   them. *Check:* `daemon` cases except the config-only-worker one, the shim race
-   test, and `claude mcp add` against the Rust binary showing zero tools.
-   **Done 2026-09-13**, with one decision the spike had not covered: MCP
-   protocol `2026-07-28` removes sessions, and rmcp then serves each request
-   statelessly, so "one taskrunner session per connected client" cannot ride on
-   its HTTP session manager without depending on the protocol version Claude
-   Code negotiates. The shim↔daemon transport is internal, so the daemon now
-   listens on two sockets: `runtime/daemon.sock` stays HTTP (`/status`, the
-   read routes) and `runtime/mcp.sock` serves one rmcp service per connection
-   as newline-delimited JSON-RPC; the shim pumps the client's stdio to it byte
-   for byte, so a connection *is* a session. The CLI parses arguments by hand
-   — usage text and error messages are frozen output — so `clap` is not used.
-   Checks: 7 daemon tests (the shim race runs the real binary), and 18 routes
-   fetched from both daemons booted on the corpus, byte-identical including
-   error bodies and status codes.
-5. **Workers** — two PRs. *5a* `workers/runner` (docker argv, network, proxy
-   sidecar, egress log → `on_egress`, `dispose`), `workspace/{git,clone}`; tests
-   `runner`, `clone`. *5b* `workers/{harness,claude,codex}`; tests `claude`, `codex`
-   against the fake binaries, extracted to `tests/fixtures/fake-{claude,codex}.js`
-   and run with `node` (a test-only dependency). *Check:* those, plus a new
-   env-gated `TASKRUNNER_LIVE_DOCKER=1` test that runs `echo` in a worker image
-   behind the real proxy — the runner has no automated exercise today.
-   **Done 2026-09-13.** The fake workers moved to `tests/fixtures/fake-*.cjs`
-   first (a TypeScript PR). 21 tests plus the live Docker test, which is
-   written but unverified: Docker was inactive on the author's machine, so it
-   runs the first time Docker is up. The harnesses share one process driver
-   (`harness::drive`): read stdout line by line, keep a stderr tail, kill on
-   cancel, report the exit.
-6. **Scheduler.** Assign/continue/cancel, `wait`, one running turn per task,
-   timeouts, tiers and approvals, worker-session and artifact events, `afterTurn`;
-   wired into the daemon's `stop()`. *Check:* the 14 scheduler cases, `integration`
-   (fake codex + clone workspaces), daemon's config-only worker, and one manual
-   `TASKRUNNER_LIVE_CODEX=1` run. **Done 2026-09-13** except the live run,
-   which waits for Docker. 16 tests: the 14 scheduler cases, the integration
-   test (which also renders lookup-task through the real stack, closing the
-   step-1b note), and the daemon's config-only worker. `resolve_project` now
-   takes the locked store so a lookup and a create happen under one lock —
-   two concurrent tasks resolving a new project could otherwise both create
-   it, something the single-threaded TypeScript never had to guard.
-7. **MCP server and CLI** — two PRs. *7a* the six tools, the `tool.<name>` audit
-   wrapper, `buildInstructions` verbatim; `tools` test. *Check:* `initialize` +
-   `tools/list` through both shims, JSON diffed — names and argument names must
-   match exactly, and schema noise (`$schema`, `additionalProperties`) is matched
-   rather than stripped, since Claude Code reads it. **7a done 2026-09-13**, by
-   a different route than planned: getting zod's draft-07 output byte for byte
-   out of `schemars` would have been fragile, so the tool contract is data —
-   `rust/src/daemon/tools.json`, the TypeScript server's own `tools/list`
-   output (names, descriptions, input schemas) — served verbatim and used to
-   validate every call with the `jsonschema` crate, as zod validated before.
-   Invalid arguments are a protocol error and never reach the tool or the
-   audit, as with the TypeScript SDK. `scripts/parity-tools.sh` lists the tools
-   through both shims with one client and diffs: equal (the SDK-generated
-   `execution` entry is dropped; rmcp has no such field). 7 tool tests. *7b* `sessions/session/search/
-   task/tasks/doctor`, usage text, `--state-root`, EPIPE guard. *Check:*
-   `scripts/parity-cli.sh` runs a fixed list of commands against the corpus with
-   both binaries and diffs byte for byte. Then register the Rust binary with Claude
-   Code and use it daily. `doctor` has no tests and nothing depends on it; it goes
-   last. **7b done 2026-09-13.** `parity-cli.sh` runs 31 commands (usage, every
-   query command with its flags, the error paths, `status` minus the pid,
-   `doctor`) against both daemons booted on the corpus and diffs stdout, stderr
-   and exit codes: 2,688 lines per side, identical. `parity-views.sh` is retired
-   as planned. What remains of the port is the daily-driver period and the
-   deletion PR.
-
-### Crates
-
-| Need | Crate |
-|---|---|
-| JSONL, config | `serde`, `serde_json` (`preserve_order`), `toml` |
-| SQLite + FTS5 | `rusqlite` (bundled) |
-| Async, sockets, HTTP, process spawn | `tokio`, `axum`, `hyper` |
-| MCP | `rmcp` (official Rust SDK) |
-| Ids | `ulid` |
-| Tests | `cargo test`; `insta` for new snapshots only |
-
-### Done when
-
-`cargo test` is green; `parity-index`, the sweep parity, the config parity, the
-`tools/list` diff and `parity-cli` are all empty; the Rust binary has been the daily
-driver long enough to trust. Then one PR deletes `src/`, `tests/`, `package.json`,
-`tsconfig.json`, `vitest.config.ts` and `scripts/debug-refold.ts`, moves `rust/` to
-the root, and updates `README`, `getting-started` (install is one binary) and
-`internals` (`tsx`/`vitest` → `cargo`; the event-loop-yield paragraph goes).
-`scripts/build-images.sh` and `docker/` are untouched. Not kept alongside; then the
-redesign begins.
-
-### Cost, honestly
-
-~6.5k lines of source and ~4k of tests, mostly mechanical. Writing Rust is slower at
-first (borrow checker, async, 10–60 s compiles vs instant `tsx`); building and
-testing are simpler (`cargo build`, `cargo test`, one binary). Storage is the step
-that takes longest and teaches most.
-
 ## How the work is done
 
 Clean and readable is a goal of the redesign, not a nicety after it.
@@ -584,9 +377,9 @@ Clean and readable is a goal of the redesign, not a nicety after it.
   `user,assistant` (tool output is noise unless asked for) and hides automation
   sessions from discovery. Taskrunner's `search-transcripts` has the same noise
   problem with worker turns; worth copying.
-- **`rmcp` spike.** The port assumes the official Rust MCP SDK covers what the
-  TypeScript one does here (stdio server, tool schemas, sessions). One afternoon to
-  confirm, before port step 1.
+- **Anchoring the pre-chain log.** Chaining starts after the port, so the log
+  already holds unchained history. Whether its hash becomes the first link, and
+  where that hash is anchored, needs deciding before the first chained event.
 - **Daemon as a service.** systemd user unit / launchd, install and uninstall
   commands, what a stop does to a running task. Small, but it gates host capture and
   `taskrunner shell`.
@@ -596,9 +389,8 @@ Clean and readable is a goal of the redesign, not a nicety after it.
 
 ## Not doing
 
-- Redesigning and porting at the same time. Port the core first (see above), then
-  build the new pieces in Rust only.
-- Porting the egress proxy. It is replaced, not carried over.
+- Extending the Node egress proxy. The redesign replaces it with the TLS-terminating
+  proxy, written in Rust.
 
 - A per-harness "ingest off" switch. Replaced by the one-archive decision above.
 - Host wire capture or Docker-hosted sessions as defaults. Both are opt-in.

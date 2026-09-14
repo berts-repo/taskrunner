@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the taskrunner worker and egress proxy images (npm run build:images).
+# Builds the taskrunner worker and egress proxy images.
 set -eu
 
 cd "$(dirname "$0")/.."

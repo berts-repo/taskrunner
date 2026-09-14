@@ -24,16 +24,18 @@ worker actually did — all stored locally on your machine.
 
 ## Quick start
 
-Requires Node 22+ and Docker.
+Requires a Rust toolchain ([rustup](https://rustup.rs)) and Docker.
 
 ```sh
-npm install
-npm run build
-npm run build:images
-claude mcp add --scope user taskrunner -- node /path/to/taskrunner/dist/cli.js mcp
+cargo build --release
+sh scripts/build-images.sh
+ln -s "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner
+claude mcp add --scope user taskrunner -- "$HOME/.local/bin/taskrunner" mcp
+codex mcp add taskrunner -- "$HOME/.local/bin/taskrunner" mcp
 ```
 
-Then sign each worker in once (see [Getting started](docs/getting-started.md)) and
+Register with each agent you use — every agent keeps its own MCP server list. Then
+sign each worker in once (see [Getting started](docs/getting-started.md)) and
 ask your agent to delegate something. Full walkthrough, including the one-time worker
 login, is in the getting-started guide.
 

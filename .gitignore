@@ -1,4 +1,1 @@
-node_modules/
-dist/
-*.tsbuildinfo
-rust/target/
+/target/
