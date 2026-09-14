@@ -93,14 +93,28 @@ pub(crate) mod drive {
                 }
             }
         };
+        let mut killed = false;
         let aborted = tokio::select! {
             _ = lines => false,
             _ = cancel.cancelled() => {
                 worker.kill();
+                killed = true;
                 true
             }
         };
-        let status: Option<ExitStatus> = worker.child.wait().await.ok();
+        // Cancel stays watched while the process goes. A worker that closes its
+        // output but keeps running ends the read above on its own, and waiting
+        // for its exit unguarded would be a turn that neither cancel-task nor
+        // the turn timeout — which fires the same token — could ever end.
+        let status: Option<ExitStatus> = loop {
+            tokio::select! {
+                status = worker.child.wait() => break status.ok(),
+                _ = cancel.cancelled(), if !killed => {
+                    worker.kill();
+                    killed = true;
+                }
+            }
+        };
         Exit {
             code: status.and_then(|s| s.code()),
             stderr_tail: stderr_tail.await.unwrap_or_default(),

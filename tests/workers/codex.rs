@@ -117,6 +117,35 @@ async fn kills_the_worker_on_abort() {
     assert!(err.message.contains("terminated by abort"), "{}", err.message);
 }
 
+#[tokio::test]
+async fn cancels_a_worker_that_closed_its_output_and_kept_running() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (_, on_event) = collect();
+    let cancel = CancellationToken::new();
+    let canceller = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        canceller.cancel();
+    });
+    // Reading this worker's output ends on its own, which is where cancel
+    // used to stop being watched: the wait for exit then never returned, so
+    // neither cancel-task nor the turn timeout could end the turn.
+    let codex = harness();
+    let runner = fake_runner(workspace.path());
+    let turn = codex.run_turn(TurnRequest {
+        runner: &runner,
+        prompt: "close-stdout-and-hang".into(),
+        native_session_id: None,
+        cancel,
+        on_event: &on_event,
+    });
+    let err = tokio::time::timeout(Duration::from_secs(5), turn)
+        .await
+        .expect("cancel did not end the turn")
+        .unwrap_err();
+    assert!(err.message.contains("terminated by abort"), "{}", err.message);
+}
+
 /// A runner that records the spec and runs nothing (well, `true`).
 struct CapturingRunner {
     captured: Mutex<Vec<WorkerSpawnSpec>>,

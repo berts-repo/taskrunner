@@ -19,7 +19,13 @@ if (prompt.includes("exit-nonzero")) {
 emit({ type: "thread.started", thread_id: threadId });
 emit({ type: "turn.started" });
 
-if (prompt.includes("hang")) {
+if (prompt.includes("close-stdout-and-hang")) {
+  // Stops writing but keeps running: reading its output ends on its own,
+  // which is where cancellation used to stop being watched. Closing fd 1 is
+  // what actually ends the pipe — process.stdout.end() leaves it open.
+  fs.closeSync(1);
+  setInterval(() => {}, 1000);
+} else if (prompt.includes("hang")) {
   // Stay alive until killed.
   setInterval(() => {}, 1000);
 } else {
