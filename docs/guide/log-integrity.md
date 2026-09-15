@@ -206,7 +206,7 @@ What you see: `taskrunner up` stops with a message like
 ```
 taskrunner: /home/you/.taskrunner/events.jsonl: line 9123 is not a valid event (…).
 Taskrunner will not start on a damaged log: repairing it would discard that line and
-every line after it. See docs/log-integrity.md, "If the daemon refuses to start".
+every line after it. See docs/guide/log-integrity.md, "If the daemon refuses to start".
 ```
 
 and your agents' Taskrunner tools are unavailable until it starts again.

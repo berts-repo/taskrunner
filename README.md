@@ -35,29 +35,33 @@ taskrunner sync
 
 `taskrunner sync` connects the agents on your machine — Claude Code, Codex, Hermes —
 to Taskrunner and gives them its skills, asking once about each. Then sign each worker
-in once (see [Getting started](docs/getting-started.md)) and ask your agent to delegate
-something. Full walkthrough, including the one-time worker
+in once (see [Getting started](docs/guide/getting-started.md)) and ask your agent to
+delegate something. Full walkthrough, including the one-time worker
 login, is in the getting-started guide.
 
 ## Documentation
 
-- **[Getting started](docs/getting-started.md)** — install, build the worker images,
-  connect your agents, sign workers in, and run the health check.
-- **[Using Taskrunner](docs/tools.md)** — the tools your agent uses to delegate,
+- **[Getting started](docs/guide/getting-started.md)** — install, build the worker
+  images, connect your agents, sign workers in, and run the health check.
+- **[Using Taskrunner](docs/guide/tools.md)** — the tools your agent uses to delegate,
   follow up, inspect, cancel, browse sessions, and search.
-- **[Configuration](docs/configuration.md)** — the optional `config.toml` and every
-  setting with its default.
-- **[Network access](docs/network-access.md)** — how the firewall works and how to
-  grant a task more reach.
-- **[Security](docs/security.md)** — what isolates a task, what it can still do, and
-  what gets recorded.
-- **[Conversation archive](docs/transcripts.md)** — what Taskrunner records, how to
-  read it back, and how worker logins are stored.
-- **[Proving the record hasn't changed](docs/log-integrity.md)** — how the record is
-  chained and anchored, and how to check it with `taskrunner verify`.
-- **[Custom & local-model workers](docs/workers.md)** — add your own worker, including
-  an offline local model.
+- **[Configuration](docs/guide/configuration.md)** — the optional `config.toml` and
+  every setting with its default.
+- **[Network access](docs/guide/network-access.md)** — how the firewall works and how
+  to grant a task more reach.
+- **[Security](docs/security/overview.md)** — what isolates a task, what it can still
+  do, and what gets recorded.
+- **[Conversation archive](docs/guide/transcripts.md)** — what Taskrunner records, how
+  to read it back, and how worker logins are stored.
+- **[Proving the record hasn't changed](docs/guide/log-integrity.md)** — how the record
+  is chained and anchored, and how to check it with `taskrunner verify`.
+- **[Custom & local-model workers](docs/guide/workers.md)** — add your own worker,
+  including an offline local model.
 
-For maintainers: the design rationale and internals live in
-[docs/internals.md](docs/internals.md), and design notes that aren't built yet in
-[docs/proposals/](docs/proposals/).
+Security investigations, such as what a real Codex task tried to reach on the
+network, are in [docs/security/](docs/security/).
+
+For maintainers: start at [CONTEXT.md](CONTEXT.md). How Taskrunner works is in
+[docs/reference/internals.md](docs/reference/internals.md); work in flight, the
+queue, design directions not built yet, and past work are under
+[docs/work/](docs/work/).

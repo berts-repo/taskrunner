@@ -23,7 +23,7 @@ maintainer reference — the "why it's built this way" behind the features descr
   `anchors.jsonl` on open, every 100 durable events and on stop. `storage/chain.rs`
   holds the fingerprint, the walk and `verify`; the log writer only adds `prev` and
   anchors. Format, rules and the pre-chain history are in
-  [Proving the record hasn't changed](log-integrity.md#technical-details).
+  [Proving the record hasn't changed](../guide/log-integrity.md#technical-details).
 - **Artifacts are content-addressed.** Diffs and raw worker event streams are stored
   by hash, referenced from the index.
 

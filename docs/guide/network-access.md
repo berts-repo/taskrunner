@@ -34,4 +34,4 @@ Docker host name (`host.docker.internal:11434`). Entries without a port — incl
 
 Every connection attempt lands in the audit trail, so you can always see exactly what
 a task tried to reach. The mechanism behind the local-network refusal is described in
-the [implementation notes](internals.md#network-firewall).
+the [implementation notes](../reference/internals.md#network-firewall).

@@ -13,7 +13,6 @@ Don't build unless asked.
 
 ## Working practices
 
-Clean and readable is a goal, not a nicety. Remove old code in the same change that
-replaces it — no parallel old-and-new. Prefer the obvious way over the clever one;
-comments say *why*, not *what*. Every behaviour change updates the doc that describes
-it in the same commit. See `docs/proposals/complete-audit.md` § How the work is done.
+The rules every agent here follows, Codex workers included, live in `AGENTS.md`:
+
+@AGENTS.md

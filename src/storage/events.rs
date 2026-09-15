@@ -255,7 +255,7 @@ fn damaged(path: &Path, line: usize, err: serde_json::Error) -> io::Error {
         format!(
             "{}: line {line} is not a valid event ({err}). Taskrunner will not start on a \
              damaged log: repairing it would discard that line and every line after it. See \
-             docs/log-integrity.md, \"If the daemon refuses to start\".",
+             docs/guide/log-integrity.md, \"If the daemon refuses to start\".",
             path.display()
         ),
     )

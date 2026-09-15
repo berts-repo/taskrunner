@@ -1,8 +1,10 @@
 # Complete audit — proposal (not implemented)
 
-Noted 2026-09-13. Nothing here is built. This captures a design conversation so the
-decisions survive; see [session-handles.md](session-handles.md) for the same kind of
-note on a different topic.
+Noted 2026-09-13. This captures a design conversation so the decisions survive; see
+[session-handles.md](session-handles.md) for the same kind of note on a different
+topic. What is described here is not built. Pieces that shipped left this document:
+how they work now is in `docs/guide/` and `docs/reference/`, and their history is in
+[the archive](../archive/).
 
 ## The goal
 
@@ -184,7 +186,7 @@ ingest  = "~/.hermes/state.db"   # searched only when the user asks for it
 ```
 
 `[host.<name>]` already exists with `connected` and `delegation`
-([Configuration](../configuration.md#harnesses)); the keys above are still to come.
+([Configuration](../../guide/configuration.md#harnesses)); the keys above are still to come.
 
 - `capture` — how this host's sessions reach the archive (the three modes above);
   `docker` adds a `mounts` allowlist.
@@ -209,42 +211,6 @@ feature, and two things called profile would confuse.
 Hermes's search ergonomics are still worth copying into taskrunner's tools for the
 hosts that rely on them: `role_filter` defaulting to `user,assistant`,
 scroll-around-a-message, browse-recent, demote (not hide) automation sessions.
-
-## Agents across harnesses
-
-Taskrunner's own skills landed: served over MCP (SEP-2640) and, for harnesses that
-can't fetch skills that way yet, linked by `taskrunner sync` — see
-[Getting started](../getting-started.md#connect-your-agents) and
-[Using Taskrunner](../tools.md#how-your-agent-knows-all-this). What remains here is
-agents.
-
-**Agents: per-harness by default.** There is no standard. Claude Code agents are
-markdown files under `~/.claude/agents/` (name, description, tools, model, system
-prompt); Codex has no agent files, only `AGENTS.md` instructions; Hermes subagents
-are defined by the `delegate_task` call itself (goal + context), not by files.
-
-- Per-harness, native format, taskrunner manages only *which* are active per host —
-  ✅ full fidelity. ❌ an agent wanted everywhere is written up to three times.
-- Taskrunner-owned definitions rendered into each harness's shape — ✅ one source.
-  ❌ lossy: `tools` and `model` do not translate; lowest common denominator.
-- Roles written as [Agent Skills](https://agentskills.io/specification), the format all
-  three harnesses already read — ✅ one source, no new format, and MCP can serve it
-  (SEP-2640). ❌ no skill format names a model or a tool list.
-
-**Decision (revised 2026-09-15):** no agent format of taskrunner's own. A role such
-as a librarian or a doc writer ships as an Agent Skill. The user's skills live in
-folders listed under `[skills] dirs`, and `taskrunner sync` links them into every
-connected harness ([Configuration](../configuration.md#your-own-skills)). They are
-linked, not served over MCP: served skills are untrusted input whose scripts need
-approval, and only one harness fetches them. The *model* that does the work is a
-worker (`[worker.<name>] model`), since no skill can name one; a skill that wants a
-particular model says which worker to delegate to. Agents needing harness-specific
-tools stay native to their harness. The earlier *portable agent* idea is dropped: a
-skill already is one.
-
-This is how companies do it too: a shared skills/prompt repo synced into every
-tool, tool-specific agent configs kept next to the tool. Nobody has a working
-universal agent format yet.
 
 ## Storage: what to borrow from Hermes, what not to
 
@@ -325,25 +291,6 @@ rather than silently returning nothing.
 one): don't full-text index thinking blocks (the largest single item and the least
 searchable); store large tool results once by content hash; raise `hot_days` only
 as far as search stays useful.
-
-## How the work is done
-
-Clean and readable is a goal of the redesign, not a nicety after it.
-
-- **Remove old code as it is replaced.** When a path is superseded (a per-harness
-  ingestion toggle, a legacy event shape, a mount table nobody reads), delete it in
-  the same change. No parallel old-and-new. Legacy event kinds stay parseable only
-  because the log is append-only — mark them as such and keep the note short.
-- **Simplify for a human reader.** Prefer one obvious way over a clever one. A
-  function should be readable top to bottom by someone new to the project; if it
-  needs a paragraph of comment to explain *what* it does, restructure it instead.
-  Comments say *why*.
-- **Docs move with the code.** Every change that alters behaviour updates the doc
-  that describes it (`docs/security.md`, `docs/transcripts.md`, `docs/configuration.md`,
-  `README.md`) in the same commit. A doc that lags the code is worse than none —
-  it is confidently wrong.
-- **This document is retired, not archived.** As pieces land, their sections move
-  into the real docs and are deleted here. When it is empty, it goes.
 
 ## Open questions
 

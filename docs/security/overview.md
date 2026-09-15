@@ -22,7 +22,7 @@ is visible to it except the one folder Taskrunner mounts.
   anyone before the container starts — safe because the clone is single-use, holds no
   secrets, and is discarded once the turn's changes land back in your repository.
 - **Bounded resources.** Memory, CPU, and process count are capped (4 GB, 2 CPUs, 512
-  processes by default; see [Configuration](configuration.md)). A runaway turn or a
+  processes by default; see [Configuration](../guide/configuration.md)). A runaway turn or a
   fork bomb hits a ceiling and Docker stops the container, instead of your machine
   grinding to a halt.
 - **A time limit.** A single turn is stopped after 30 minutes by default.
@@ -78,7 +78,7 @@ domains and refuses everything else.
 - **Every attempt is logged**, allowed or refused, with the host and port.
 
 Full detail, including how to grant more reach, is in
-[Network access](network-access.md).
+[Network access](../guide/network-access.md).
 
 ## Worker logins
 
@@ -132,11 +132,11 @@ after the fact, you can always establish what a task actually did.
   changed.
 
 Read it back with the lookup tools or from the terminal — see
-[Conversation archive](transcripts.md).
+[Conversation archive](../guide/transcripts.md).
 
 The record is tamper-evident: every entry is chained to all the entries before it by a
 fingerprint, so an edit, deletion or reordering shows up when you run
-`taskrunner verify`. See [Proving the record hasn't changed](log-integrity.md).
+`taskrunner verify`. See [Proving the record hasn't changed](../guide/log-integrity.md).
 
 The flip side: transcripts are stored in plain text under your home directory. Whatever
 appears in a conversation — including a secret a worker printed — is on disk until you

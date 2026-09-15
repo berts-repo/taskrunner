@@ -28,7 +28,7 @@ proxy_image = "taskrunner/egress-proxy"
 [skills]
 dirs = []                     # folders of your own agent skills — see below
 
-[ingest]                      # the conversation archive — see docs/transcripts.md
+[ingest]                      # the conversation archive — see docs/guide/transcripts.md
 interval_seconds = 300        # how often Taskrunner sweeps in new transcripts
 
 [ingest.sources.claude-code]  # built-in; [ingest.sources.codex] is the same shape

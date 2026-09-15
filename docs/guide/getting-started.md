@@ -77,7 +77,7 @@ repeat this when a login expires or you set up a new machine.
 for claude). Logging in at a different path hides the credentials where the worker
 can't find them at run time, which shows up later as `401 Missing bearer` errors.
 The reason for these specific paths is in the
-[implementation notes](internals.md#worker-sign-in).
+[implementation notes](../reference/internals.md#worker-sign-in).
 
 ## Check everything is ready
 
