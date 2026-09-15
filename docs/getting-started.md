@@ -34,7 +34,9 @@ once:
    agent's own `mcp add` command.
 4. **Gives it Taskrunner's skills** — how to delegate a task and review what comes
    back, search the archive, sign a worker in, and set up another agent. They're written
-   under `~/.taskrunner/skills/` and linked into the agent's skills folder.
+   under `~/.taskrunner/skills/` and linked into the agent's skills folder. Skills of
+   your own, from the folders listed under `[skills]`, are linked the same way (see
+   [Configuration](configuration.md#your-own-skills)).
 
 Hermes is the exception to the last two: Taskrunner never edits Hermes's config file,
 so sync prints the lines to add to it instead.

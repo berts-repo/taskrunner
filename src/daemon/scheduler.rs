@@ -18,7 +18,7 @@ use crate::domain::tasks::{
     ArtifactHandle, INSPECTION_FAILED, TaskSnapshot, get_inspection_error, get_task_snapshot,
     get_turn_artifacts,
 };
-use crate::harnesses::{default_image, worker_kind};
+use crate::harnesses::worker_kind;
 use crate::ids::{IdPrefix, new_id};
 use crate::js;
 use crate::storage::Recorder;
@@ -517,7 +517,7 @@ impl Scheduler {
         let with = InspectWith {
             image: worker_cfg.image.clone().or_else(|| {
                 worker_kind(&self.deps.config, &snapshot.worker)
-                    .map(|kind| default_image(kind).to_string())
+                    .map(|kind| kind.defaults().image.to_string())
             }),
             limits: worker_cfg.limits.clone(),
         };

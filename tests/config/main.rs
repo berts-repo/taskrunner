@@ -42,7 +42,30 @@ fn brings_a_custom_worker_to_life_from_config_alone() {
     assert_eq!(cfg.model.as_deref(), Some("qwen2.5-coder:32b"));
     assert_eq!(cfg.provider, Some(Provider::Ollama));
     assert_eq!(cfg.allowed_domains, vec!["host.docker.internal:11434"]);
+    // A local model signs in nowhere: no login, no cloud domains, no image of its own.
     assert_eq!(cfg.auth_volume, None);
+    assert_eq!(cfg.image, None);
+}
+
+#[test]
+fn a_custom_cloud_worker_inherits_its_harness_sign_in_image_and_domains() {
+    let config =
+        parse_config("[worker.luna]\nharness = \"codex\"\nmodel = \"gpt-5.6-luna\"\n").unwrap();
+    let (luna, codex) = (worker_config(&config, "luna"), worker_config(&config, "codex"));
+    assert_eq!(luna.model.as_deref(), Some("gpt-5.6-luna"));
+    assert_eq!(luna.auth_volume, codex.auth_volume);
+    assert_eq!(luna.image, codex.image);
+    assert_eq!(luna.allowed_domains, codex.allowed_domains);
+}
+
+#[test]
+fn a_custom_worker_keeps_whatever_it_sets_itself() {
+    let text =
+        "[worker.boxed]\nharness = \"claude\"\nallowed_domains = []\nauth_volume = \"own\"\n";
+    let boxed = worker_config(&parse_config(text).unwrap(), "boxed");
+    assert!(boxed.allowed_domains.is_empty());
+    assert_eq!(boxed.auth_volume.as_deref(), Some("own"));
+    assert_eq!(boxed.image.as_deref(), Some("taskrunner/claude-worker"));
 }
 
 #[test]
@@ -191,4 +214,15 @@ fn refuses_an_unknown_harness_and_a_stray_host_key() {
     assert!(parse_config("[host.cursor]\nconnected = true\n").is_err());
     assert!(parse_config("[host.claude]\nconected = true\n").is_err());
     assert!(parse_config("[host.claude]\ndelegation = \"always\"\n").is_err());
+}
+
+// ---- skills: the user's own -------------------------------------------------
+
+#[test]
+fn reads_skill_folders_and_refuses_a_stray_key_or_a_relative_path() {
+    let config = parse_config("[skills]\ndirs = [\"~/skills\", \"/opt/skills\"]\n").unwrap();
+    assert_eq!(config.skills.dirs, vec!["~/skills", "/opt/skills"]);
+    assert!(Config::default_loaded().skills.dirs.is_empty());
+    assert!(parse_config("[skills]\ndir = [\"~/skills\"]\n").is_err());
+    assert!(parse_config("[skills]\ndirs = [\"skills\"]\n").is_err());
 }

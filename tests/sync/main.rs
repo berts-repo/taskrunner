@@ -100,10 +100,26 @@ impl Machine {
     fn config(&self) -> String {
         fs::read_to_string(self.state.join("config.toml")).unwrap_or_default()
     }
+
+    fn write_config(&self, text: &str) {
+        fs::create_dir_all(&self.state).unwrap();
+        fs::write(self.state.join("config.toml"), text).unwrap();
+    }
 }
 
 fn link_target(link: &Path) -> Option<PathBuf> {
     fs::read_link(link).ok()
+}
+
+/// A skill folder named `folder` whose SKILL.md says `name`, with a nested
+/// `metadata` map as agentskills.io allows.
+fn write_skill(dir: &Path, folder: &str, name: &str) {
+    let skill = dir.join(folder);
+    fs::create_dir_all(&skill).unwrap();
+    let text = format!(
+        "---\nname: {name}\ndescription: A test skill.\nmetadata:\n  author: me\n---\n\nBody.\n"
+    );
+    fs::write(skill.join("SKILL.md"), text).unwrap();
 }
 
 #[test]
@@ -256,6 +272,8 @@ fn hermes_gets_the_lines_to_add_and_its_config_is_never_edited() {
 fn a_harness_that_gets_skills_over_mcp_loses_its_links() {
     let m = machine();
     m.install("claude", CLAUDE);
+    write_skill(&m.home.join("my-skills"), "librarian", "librarian");
+    m.write_config("[skills]\ndirs = [\"~/my-skills\"]\n");
     m.sync(&["--connect", "claude"]);
     assert!(m.claude_skill("delegate-task").exists());
 
@@ -287,4 +305,58 @@ fn a_harness_that_gets_skills_over_mcp_loses_its_links() {
     let out = m.sync(&[]);
     assert!(out.contains("unlinked delegate-task (it gets skills over MCP now)"), "{out}");
     assert!(fs::symlink_metadata(m.claude_skill("delegate-task")).is_err());
+    // Your own skills are never served over MCP, so their links stay.
+    assert!(m.claude_skill("librarian").join("SKILL.md").exists());
+    assert!(!out.contains("unlinked librarian"), "{out}");
+}
+
+#[test]
+fn links_your_own_skills_and_unlinks_one_whose_folder_is_gone() {
+    let m = machine();
+    m.install("claude", CLAUDE);
+    let mine = m.home.join("my-skills");
+    write_skill(&mine, "librarian", "librarian");
+    fs::create_dir_all(mine.join("librarian/references")).unwrap();
+    fs::write(mine.join("librarian/references/doc-rules.md"), "the rules").unwrap();
+    m.write_config("[skills]\ndirs = [\"~/my-skills\"]\n");
+
+    let out = m.sync(&["--connect", "claude"]);
+    assert!(out.contains("claude: added your skill librarian"), "{out}");
+    assert!(out.contains("claude: linked librarian"), "{out}");
+    let through_link = m.claude_skill("librarian").join("references/doc-rules.md");
+    assert_eq!(fs::read_to_string(through_link).unwrap(), "the rules");
+    let beside_taskrunners = m.state.join("skills/claude/librarian");
+    assert_eq!(link_target(&m.claude_skill("librarian")), Some(beside_taskrunners.clone()));
+    assert_eq!(link_target(&beside_taskrunners), Some(mine.join("librarian")));
+    let again = m.sync(&[]);
+    assert!(again.contains("nothing to change"), "{again}");
+
+    fs::remove_dir_all(mine.join("librarian")).unwrap();
+    let out = m.sync(&[]);
+    assert!(out.contains("claude: removed skill librarian"), "{out}");
+    assert!(out.contains("claude: unlinked librarian"), "{out}");
+    assert!(fs::symlink_metadata(m.claude_skill("librarian")).is_err());
+    assert!(fs::symlink_metadata(&beside_taskrunners).is_err());
+}
+
+#[test]
+fn refuses_a_skill_of_yours_that_would_shadow_another_or_is_misnamed() {
+    let m = machine();
+    m.install("claude", CLAUDE);
+    let (a, b) = (m.home.join("a"), m.home.join("b"));
+    write_skill(&a, "delegate-task", "delegate-task");
+    write_skill(&a, "notes", "notes");
+    write_skill(&b, "notes", "notes");
+    write_skill(&b, "misnamed", "other-name");
+    m.write_config("[skills]\ndirs = [\"~/a\", \"~/b\"]\n");
+
+    let out = m.sync(&["--connect", "claude"]);
+    assert!(out.contains("'delegate-task' is the name of one of taskrunner's own skills"), "{out}");
+    assert!(out.contains("already has a skill named 'notes'"), "{out}");
+    assert!(out.contains("names it 'other-name'"), "{out}");
+    assert_eq!(link_target(&m.state.join("skills/claude/notes")), Some(a.join("notes")));
+    assert!(fs::symlink_metadata(m.claude_skill("misnamed")).is_err());
+    let own = m.state.join("skills/claude/delegate-task");
+    assert_eq!(link_target(&m.claude_skill("delegate-task")), Some(own.clone()));
+    assert!(own.join("SKILL.md").is_file(), "taskrunner's own skill is untouched");
 }

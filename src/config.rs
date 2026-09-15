@@ -25,6 +25,50 @@ impl HarnessKind {
             _ => None,
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HarnessKind::Codex => "codex",
+            HarnessKind::Claude => "claude",
+        }
+    }
+
+    /// What this harness's built-in worker runs with. A custom worker calling
+    /// the same cloud service inherits all of it (see `with_builtin_workers`);
+    /// any worker on the harness falls back to its image.
+    pub fn defaults(self) -> HarnessDefaults {
+        match self {
+            HarnessKind::Codex => HarnessDefaults {
+                image: "taskrunner/codex-worker",
+                auth_volume: "taskrunner-codex-home",
+                allowed_domains: &[
+                    "api.openai.com",
+                    "auth.openai.com",
+                    "chatgpt.com",
+                    "*.chatgpt.com",
+                ],
+            },
+            // platform.claude.com serves the OAuth token refresh; blocking it
+            // strands the worker with 401s once its access token ages out.
+            HarnessKind::Claude => HarnessDefaults {
+                image: "taskrunner/claude-worker",
+                auth_volume: "taskrunner-claude-home",
+                allowed_domains: &[
+                    "api.anthropic.com",
+                    "*.anthropic.com",
+                    "claude.ai",
+                    "platform.claude.com",
+                ],
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HarnessDefaults {
+    pub image: &'static str,
+    pub auth_volume: &'static str,
+    pub allowed_domains: &'static [&'static str],
 }
 
 /// A harness that runs taskrunner — the other direction from a worker, which
@@ -161,16 +205,23 @@ struct RawWorker {
 }
 
 impl RawWorker {
-    fn into_worker(self, default_domains: &[&str]) -> WorkerConfig {
+    /// Fills what the section leaves out from `inherit`'s built-in worker, or
+    /// leaves it empty when there is nothing to inherit.
+    fn into_worker(self, inherit: Option<HarnessKind>) -> WorkerConfig {
+        let defaults = inherit.map(HarnessKind::defaults);
         WorkerConfig {
             harness: self.harness,
             model: self.model,
             provider: self.provider,
-            image: self.image,
-            auth_volume: self.auth_volume,
-            allowed_domains: self
-                .allowed_domains
-                .unwrap_or_else(|| default_domains.iter().map(|d| d.to_string()).collect()),
+            image: self.image.or_else(|| defaults.map(|d| d.image.to_string())),
+            auth_volume: self.auth_volume.or_else(|| defaults.map(|d| d.auth_volume.to_string())),
+            allowed_domains: self.allowed_domains.unwrap_or_else(|| {
+                defaults
+                    .iter()
+                    .flat_map(|d| d.allowed_domains.iter())
+                    .map(|d| d.to_string())
+                    .collect()
+            }),
             limits: self.limits,
         }
     }
@@ -224,6 +275,16 @@ impl Default for EgressConfig {
     }
 }
 
+/// `[skills]`: folders of the user's own agent skills, one skill per
+/// subfolder, which `taskrunner sync` links into every connected harness.
+/// Strict, like hosts: a typo'd key would leave the skills silently unlinked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct SkillsConfig {
+    /// Absolute, or starting with `~/`: sync runs from any directory.
+    pub dirs: Vec<String>,
+}
+
 /// Interval and sources live under one [ingest] section; sources nest one
 /// level deeper so the scalar interval_seconds does not collide with the
 /// source catch-all.
@@ -261,6 +322,7 @@ pub struct Config {
     pub ingest: IngestConfig,
     /// Keyed by `HostKind` name; `parse_config` rejects any other key.
     pub host: IndexMap<String, HostConfig>,
+    pub skills: SkillsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -271,6 +333,7 @@ struct RawConfig {
     egress: EgressConfig,
     ingest: RawIngest,
     host: IndexMap<String, HostConfig>,
+    skills: SkillsConfig,
 }
 
 impl Config {
@@ -301,6 +364,10 @@ pub fn parse_config(text: &str) -> anyhow::Result<Config> {
     if let Some(name) = raw.host.keys().find(|name| HostKind::parse(name).is_none()) {
         anyhow::bail!("host.{name} is not a harness taskrunner knows (claude, codex, hermes)");
     }
+    if let Some(dir) = raw.skills.dirs.iter().find(|d| !(d.starts_with('/') || d.starts_with("~/")))
+    {
+        anyhow::bail!("skills.dirs: '{dir}' must be an absolute path or start with ~/");
+    }
     Ok(Config {
         task: raw.task,
         worker: with_builtin_workers(raw.worker),
@@ -310,6 +377,7 @@ pub fn parse_config(text: &str) -> anyhow::Result<Config> {
             sources: with_builtin_sources(raw.ingest.sources)?,
         },
         host: raw.host,
+        skills: raw.skills,
     })
 }
 
@@ -328,34 +396,23 @@ pub fn worker_config(config: &Config, worker: &str) -> WorkerConfig {
 }
 
 /// The built-in workers first (so they are always present and listed first),
-/// then every custom section in file order.
+/// then every custom section in file order. A custom worker calling its
+/// harness's cloud service inherits the built-in's sign-in, image and API
+/// domains, so another model is one `model` line. One with a local `provider`
+/// inherits none of them: it signs in nowhere and reaches only what it lists.
 fn with_builtin_workers(
     mut configured: IndexMap<String, RawWorker>,
 ) -> IndexMap<String, WorkerConfig> {
-    let mut builtin = |name: &str, image: &str, volume: &str, domains: &[&str]| {
-        let mut worker = configured.shift_remove(name).unwrap_or_default().into_worker(domains);
-        worker.image.get_or_insert_with(|| image.to_string());
-        worker.auth_volume.get_or_insert_with(|| volume.to_string());
-        (name.to_string(), worker)
-    };
-    let mut workers = IndexMap::from([
-        builtin(
-            "codex",
-            "taskrunner/codex-worker",
-            "taskrunner-codex-home",
-            &["api.openai.com", "auth.openai.com", "chatgpt.com", "*.chatgpt.com"],
-        ),
-        // platform.claude.com serves the OAuth token refresh; blocking it
-        // strands the worker with 401s once its access token ages out.
-        builtin(
-            "claude",
-            "taskrunner/claude-worker",
-            "taskrunner-claude-home",
-            &["api.anthropic.com", "*.anthropic.com", "claude.ai", "platform.claude.com"],
-        ),
-    ]);
+    let mut workers: IndexMap<String, WorkerConfig> = [HarnessKind::Codex, HarnessKind::Claude]
+        .into_iter()
+        .map(|kind| {
+            let worker = configured.shift_remove(kind.as_str()).unwrap_or_default();
+            (kind.as_str().to_string(), worker.into_worker(Some(kind)))
+        })
+        .collect();
     for (name, worker) in configured {
-        workers.insert(name, worker.into_worker(&[]));
+        let inherit = worker.harness.filter(|_| worker.provider.is_none());
+        workers.insert(name, worker.into_worker(inherit));
     }
     workers
 }

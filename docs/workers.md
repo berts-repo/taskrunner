@@ -11,6 +11,28 @@ Custom workers inherit the same container resource limits as the built-ins
 (memory 4g, cpus 2, pids 512); add a `[worker.<name>.limits]` section to override
 them — see [Configuration](configuration.md).
 
+## Another cloud model
+
+To hand tasks to a different model on the same service, name the harness and the
+model:
+
+```toml
+[worker.luna]
+harness = "codex"
+model = "gpt-5.6-luna"
+```
+
+It shares the built-in worker's sign-in, image and network allowlist, so there is
+nothing else to set: signing `codex` in once covers both. Ask your agent to delegate
+with `worker: "luna"`. Set `auth_volume` or `allowed_domains` in the section to give
+it its own.
+
+A worker picks the model, not the job. For a job you hand out often, such as a docs
+librarian, write a skill (see [Your own skills](configuration.md#your-own-skills)) and
+have it say which worker to delegate to. A worker sees only the project, not your
+skills, so rules a delegated task must follow belong in the project's `AGENTS.md` or
+`CLAUDE.md`, or in the prompt.
+
 ## A local, offline model
 
 You can run a worker against a model on your own machine, with no login and no
@@ -24,6 +46,9 @@ provider = "ollama"                # or "lmstudio"
 model = "qwen2.5-coder:32b"
 allowed_domains = ["host.docker.internal:11434"]
 ```
+
+Because it names a `provider`, it inherits nothing from the codex worker: no sign-in
+and no network access beyond the port it lists.
 
 To use it:
 

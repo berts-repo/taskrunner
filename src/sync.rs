@@ -5,9 +5,11 @@
 //!    records the answer under `[host.<name>]` in config.toml;
 //! 2. checks it is signed in, and hands the user the login command if not;
 //! 3. registers taskrunner with it as `taskrunner mcp --host <name>`;
-//! 4. writes taskrunner's skills under `skills/<host>/` in the state root and
-//!    links them where the harness looks — unless the harness already gets
-//!    them over MCP, in which case the links are removed.
+//! 4. writes taskrunner's skills under `skills/<host>/` in the state root, next
+//!    to a link to each of the user's own skills (`[skills] dirs`), and links
+//!    them all where the harness looks. A harness that already gets
+//!    taskrunner's skills over MCP loses those links; the user's stay, since
+//!    they are never served.
 //!
 //! Every step is something the user can also do by hand, and `taskrunner
 //! doctor` reports the same state without changing it. Taskrunner never edits
@@ -26,8 +28,9 @@ use serde_json::Value;
 
 use crate::cli::say;
 use crate::config::{Config, Delegation, HostConfig, HostKind, load_config};
+use crate::ingest::sweep::expand_home;
 use crate::paths::{StatePaths, default_root};
-use crate::skills::{self, Skill};
+use crate::skills::{self, UserSkill};
 
 fn label(host: HostKind) -> &'static str {
     match host {
@@ -360,13 +363,17 @@ impl Report {
     }
 }
 
-/// Writes one host's rendered skills, touching only files that changed. The
-/// files are read-only: an agent that curates skills (Hermes's does) edits
-/// whatever it can write.
+/// Writes one host's rendered skills, touching only files that changed, and
+/// links each of the user's skills beside them. The files are read-only: an
+/// agent that curates skills (Hermes's does) edits whatever it can write.
+/// Harness links point here rather than at the user's folders, so a link
+/// pointing into the state root is taskrunner's whoever wrote the skill, and
+/// Hermes reads both kinds through its one `external_dirs` entry.
 fn write_host_skills(
     paths: &StatePaths,
     host: HostKind,
     delegation: Delegation,
+    user: &[UserSkill],
     report: &mut Report,
 ) -> anyhow::Result<()> {
     let dir = host_skills_dir(paths, host);
@@ -388,9 +395,27 @@ fn write_host_skills(
     for entry in fs::read_dir(&dir)? {
         let path = entry?.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-        if path.is_dir() && !rendered.iter().any(|skill| skill.name == name) {
+        let current = rendered.iter().any(|skill| skill.name == name)
+            || user.iter().any(|skill| {
+                skill.name == name && fs::read_link(&path).is_ok_and(|to| to == skill.dir)
+            });
+        if current {
+            continue;
+        }
+        if path.is_symlink() {
+            fs::remove_file(&path)?;
+        } else if path.is_dir() {
             fs::remove_dir_all(&path)?;
-            report.change(host, format!("removed skill {name}"));
+        } else {
+            continue;
+        }
+        report.change(host, format!("removed skill {name}"));
+    }
+    for skill in user {
+        let link = dir.join(&skill.name);
+        if !link.is_symlink() {
+            symlink(&skill.dir, &link).with_context(|| format!("linking {}", link.display()))?;
+            report.change(host, format!("added your skill {}", skill.name));
         }
     }
     Ok(())
@@ -400,12 +425,27 @@ fn write_host_skills(
 /// starts, so an upgraded taskrunner's skills reach harnesses without a sync.
 pub fn write_skills(paths: &StatePaths, config: &Config) -> anyhow::Result<()> {
     let mut report = Report::default();
+    // Skipped skills are sync's to report; the daemon has nobody to tell.
+    let (user, _) = user_skills(config);
     for host in HostKind::ALL {
         if config.host(host).is_some_and(|settings| settings.connected) {
-            write_host_skills(paths, host, config.delegation(Some(host)), &mut report)?;
+            write_host_skills(paths, host, config.delegation(Some(host)), &user, &mut report)?;
         }
     }
     Ok(())
+}
+
+/// The user's own skills from `[skills] dirs`, and why any were left out.
+pub fn user_skills(config: &Config) -> (Vec<UserSkill>, Vec<String>) {
+    let dirs: Vec<PathBuf> = config.skills.dirs.iter().map(|dir| expand_home(dir)).collect();
+    skills::user_skills(&dirs)
+}
+
+/// The skills a harness's folder should link: taskrunner's unless the harness
+/// gets them over MCP, and the user's always, because those are never served.
+fn linked_names(over_mcp: bool, user: &[UserSkill]) -> Vec<String> {
+    let own = if over_mcp { vec![] } else { skills::render(Delegation::default()) };
+    own.into_iter().map(|skill| skill.name).chain(user.iter().map(|s| s.name.clone())).collect()
 }
 
 /// A link is taskrunner's when it points into the skills folder of the state root.
@@ -420,15 +460,20 @@ pub struct LinkState {
     pub foreign: Vec<String>,
 }
 
-pub fn link_state(paths: &StatePaths, host: HostKind, dir: &Path) -> LinkState {
+pub fn link_state(
+    paths: &StatePaths,
+    host: HostKind,
+    dir: &Path,
+    over_mcp: bool,
+    user: &[UserSkill],
+) -> LinkState {
     let mut state = LinkState::default();
-    for skill in skills::render(Delegation::default()) {
-        let link = dir.join(&skill.name);
+    for name in linked_names(over_mcp, user) {
+        let link = dir.join(&name);
         if fs::symlink_metadata(&link).is_err() {
-            state.missing.push(skill.name);
-        } else if fs::read_link(&link).ok() != Some(host_skills_dir(paths, host).join(&skill.name))
-        {
-            state.foreign.push(skill.name);
+            state.missing.push(name);
+        } else if fs::read_link(&link).ok() != Some(host_skills_dir(paths, host).join(&name)) {
+            state.foreign.push(name);
         }
     }
     state
@@ -439,10 +484,11 @@ fn sync_links(
     host: HostKind,
     dir: &Path,
     over_mcp: bool,
+    user: &[UserSkill],
     report: &mut Report,
 ) -> anyhow::Result<()> {
-    let skills = skills::render(Delegation::default());
-    let wanted = |name: &str| !over_mcp && skills.iter().any(|skill| skill.name == name);
+    let wanted = linked_names(over_mcp, user);
+    let own = skills::render(Delegation::default());
     if dir.exists() {
         for entry in fs::read_dir(dir)? {
             let link = entry?.path();
@@ -451,17 +497,15 @@ fn sync_links(
             }
             let name = link.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
             let target = host_skills_dir(paths, host).join(&name);
-            if !wanted(&name) || fs::read_link(&link).ok() != Some(target) {
+            if !wanted.contains(&name) || fs::read_link(&link).ok() != Some(target) {
                 fs::remove_file(&link)?;
-                let why = if over_mcp { " (it gets skills over MCP now)" } else { "" };
+                let served = over_mcp && own.iter().any(|skill| skill.name == name);
+                let why = if served { " (it gets skills over MCP now)" } else { "" };
                 report.change(host, format!("unlinked {name}{why}"));
             }
         }
     }
-    if over_mcp {
-        return Ok(());
-    }
-    for Skill { name, .. } in &skills {
+    for name in &wanted {
         let link = dir.join(name);
         if is_ours(paths, &link) {
             continue;
@@ -698,10 +742,11 @@ fn register(paths: &StatePaths, host: HostKind, current: &Registration, report: 
 /// Hermes is registered and pointed at the skills by lines in its own config,
 /// which taskrunner reads but never writes. When they are missing, the report
 /// carries them for the user (or an agent) to add.
-fn check_hermes(paths: &StatePaths, over_mcp: bool, report: &mut Report) {
+fn check_hermes(paths: &StatePaths, over_mcp: bool, user: &[UserSkill], report: &mut Report) {
     let host = HostKind::Hermes;
     let registered = matches!(registration(paths, host), Registration::Current);
-    let reads_skills = over_mcp || hermes_reads_skills(paths);
+    // The user's skills are never served, so they need external_dirs regardless.
+    let reads_skills = (over_mcp && user.is_empty()) || hermes_reads_skills(paths);
     if registered && reads_skills {
         return;
     }
@@ -736,6 +781,7 @@ fn sync_host(
     paths: &StatePaths,
     host: HostKind,
     delegation: Delegation,
+    user: &[UserSkill],
     report: &mut Report,
 ) -> anyhow::Result<()> {
     if !installed(host) {
@@ -757,28 +803,30 @@ fn sync_host(
             return Ok(());
         }
     }
-    write_host_skills(paths, host, delegation, report)?;
+    write_host_skills(paths, host, delegation, user, report)?;
     let over_mcp = gets_skills_over_mcp(paths, host);
     let Some(dir) = link_dir(host) else {
-        check_hermes(paths, over_mcp, report);
+        check_hermes(paths, over_mcp, user, report);
         return Ok(());
     };
     match registration(paths, host) {
         Registration::Current => {}
         stale => register(paths, host, &stale, report),
     }
-    sync_links(paths, host, &dir, over_mcp, report)
+    sync_links(paths, host, &dir, over_mcp, user, report)
 }
 
 pub fn run_sync(paths: &StatePaths, options: &SyncOptions) -> anyhow::Result<i32> {
     let config = load_config(&paths.config_file)?;
     let mut report = Report::default();
+    let (user, skipped) = user_skills(&config);
+    report.lines.extend(skipped.iter().map(|why| format!("skills: {why}")));
     for host in HostKind::ALL {
         let Some(settings) = settle_host(paths, &config, host, options, &mut report)? else {
             continue;
         };
         if settings.connected {
-            sync_host(paths, host, settings.delegation, &mut report)?;
+            sync_host(paths, host, settings.delegation, &user, &mut report)?;
         }
     }
     for line in &report.lines {

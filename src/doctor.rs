@@ -14,7 +14,7 @@ use crate::cli::say;
 use crate::client;
 use crate::config::{Config, HarnessKind, HostKind, load_config, worker_config};
 use crate::daemon::mcp::VERSION;
-use crate::harnesses::{default_image, ingest_sources, worker_kind, worker_names};
+use crate::harnesses::{ingest_sources, worker_kind, worker_names};
 use crate::ingest::sweep::expand_home;
 use crate::paths::StatePaths;
 use crate::sync::{self, Registration, SignIn};
@@ -106,7 +106,7 @@ fn check_workers(config: &Config, docker_up: bool, checks: &mut Vec<Check>) {
         let image = cfg
             .image
             .clone()
-            .or_else(|| kind.map(|k| default_image(k).to_string()))
+            .or_else(|| kind.map(|k| k.defaults().image.to_string()))
             .unwrap_or_default();
         if image.is_empty() {
             checks.push(check(Level::Fail, format!("worker {name}"), "no image configured"));
@@ -220,6 +220,13 @@ fn parse_expiry(text: &str) -> Option<i64> {
 /// Each harness on this machine: set up by sync, signed in, registered as its
 /// host, and given the skills. Asks each harness's own status commands.
 fn check_harnesses(config: &Config, paths: &StatePaths, checks: &mut Vec<Check>) {
+    let (user, skipped) = sync::user_skills(config);
+    if !skipped.is_empty() {
+        checks.push(check(Level::Warn, "your skills", skipped.join("; ")));
+    } else if !config.skills.dirs.is_empty() {
+        let detail = format!("{} found in {}", user.len(), config.skills.dirs.join(", "));
+        checks.push(check(Level::Ok, "your skills", detail));
+    }
     for host in HostKind::ALL {
         let name = host.as_str();
         let label = format!("harness {name}");
@@ -269,7 +276,8 @@ fn check_harnesses(config: &Config, paths: &StatePaths, checks: &mut Vec<Check>)
             ),
         });
         let skills = format!("{label} skills");
-        if sync::gets_skills_over_mcp(paths, host) {
+        let over_mcp = sync::gets_skills_over_mcp(paths, host);
+        if over_mcp && user.is_empty() {
             checks.push(check(Level::Ok, skills, "served over MCP"));
             continue;
         }
@@ -283,7 +291,7 @@ fn check_harnesses(config: &Config, paths: &StatePaths, checks: &mut Vec<Check>)
                 "skills.external_dirs doesn't list taskrunner's skills; run taskrunner sync for the lines to add",
             ),
             Some(dir) => {
-                let state = sync::link_state(paths, host, &dir);
+                let state = sync::link_state(paths, host, &dir, over_mcp, &user);
                 if !state.foreign.is_empty() {
                     let detail = format!(
                         "not taskrunner's, or out of date: {}; run taskrunner sync",

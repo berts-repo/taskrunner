@@ -45,7 +45,7 @@ fn docker_runner_factory(config: Arc<Config>, store: SharedStore) -> Arc<MakeRun
             scope_id: ctx.turn_id,
             image: cfg
                 .image
-                .or_else(|| kind.map(|k| default_image(k).to_string()))
+                .or_else(|| kind.map(|k| k.defaults().image.to_string()))
                 .unwrap_or_default(),
             auth_volume: cfg.auth_volume,
             auth_mounts: kind.map(auth_mounts).unwrap_or_default(),
@@ -95,7 +95,7 @@ async fn read_host_preamble(reader: &mut BufReader<OwnedReadHalf>) -> Option<Hos
     reader.read_line(&mut line).await.ok()?;
     HostKind::parse(line.trim_end().strip_prefix(HOST_PREAMBLE)?)
 }
-use crate::harnesses::{auth_mounts, build_harnesses, default_image, ingest_sources, worker_kind};
+use crate::harnesses::{auth_mounts, build_harnesses, ingest_sources, worker_kind};
 use crate::ingest::sweep::{IngestSource, SweepStats, SweeperDeps, TranscriptSweeper};
 use crate::ingest::volume::{docker_copy_out, reap_copy_out_containers};
 use crate::paths::StatePaths;

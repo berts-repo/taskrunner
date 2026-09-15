@@ -90,14 +90,6 @@ pub fn auth_mounts(kind: HarnessKind) -> Vec<AuthMount> {
     }
 }
 
-/// Image fallback so config-only workers need no image key.
-pub fn default_image(kind: HarnessKind) -> &'static str {
-    match kind {
-        HarnessKind::Codex => "taskrunner/codex-worker",
-        HarnessKind::Claude => "taskrunner/claude-worker",
-    }
-}
-
 /// Where each harness kind keeps its native transcripts inside its auth
 /// volume, and which parser format reads them. Verified against
 /// `auth_mounts`: the codex volume root is ~/.codex, the claude volume root is
@@ -144,7 +136,7 @@ pub fn ingest_sources(config: &Config) -> Vec<IngestSource> {
             format: format.into(),
             volume: Some(volume),
             subdir: Some(subdir.into()),
-            image: Some(cfg.image.unwrap_or_else(|| default_image(kind).into())),
+            image: Some(cfg.image.unwrap_or_else(|| kind.defaults().image.into())),
             ..Default::default()
         });
     }

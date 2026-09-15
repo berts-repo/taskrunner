@@ -18,7 +18,6 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::config::{HarnessKind, ResourceLimits};
-use crate::harnesses::default_image;
 use crate::process::{remove_labelled_containers, run};
 use crate::workers::runner::resource_limit_args;
 
@@ -164,7 +163,7 @@ impl ContainerGit {
     fn images(&self, with: &InspectWith) -> Vec<String> {
         let mut images: Vec<String> = with.image.iter().cloned().collect();
         for kind in [HarnessKind::Codex, HarnessKind::Claude] {
-            let builtin = default_image(kind).to_string();
+            let builtin = kind.defaults().image.to_string();
             if !images.contains(&builtin) {
                 images.push(builtin);
             }

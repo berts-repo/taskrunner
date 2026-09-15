@@ -227,13 +227,20 @@ are defined by the `delegate_task` call itself (goal + context), not by files.
   ✅ full fidelity. ❌ an agent wanted everywhere is written up to three times.
 - Taskrunner-owned definitions rendered into each harness's shape — ✅ one source.
   ❌ lossy: `tools` and `model` do not translate; lowest common denominator.
+- Roles written as [Agent Skills](https://agentskills.io/specification), the format all
+  three harnesses already read — ✅ one source, no new format, and MCP can serve it
+  (SEP-2640). ❌ no skill format names a model or a tool list.
 
-**Decision:** native per-harness agents by default, managed per `[host.<name>]`.
-A small opt-in *portable agent* format (description + instructions + suggested
-tools) for the agents that are really a skill with a role attached — most are —
-rendered by `taskrunner sync` into a Claude agent file, a Hermes skill that says how
-to delegate that role, or an `AGENTS.md` section. Anything needing harness-specific
-tools or models stays native and is not made portable.
+**Decision (revised 2026-09-15):** no agent format of taskrunner's own. A role such
+as a librarian or a doc writer ships as an Agent Skill. The user's skills live in
+folders listed under `[skills] dirs`, and `taskrunner sync` links them into every
+connected harness ([Configuration](../configuration.md#your-own-skills)). They are
+linked, not served over MCP: served skills are untrusted input whose scripts need
+approval, and only one harness fetches them. The *model* that does the work is a
+worker (`[worker.<name>] model`), since no skill can name one; a skill that wants a
+particular model says which worker to delegate to. Agents needing harness-specific
+tools stay native to their harness. The earlier *portable agent* idea is dropped: a
+skill already is one.
 
 This is how companies do it too: a shared skills/prompt repo synced into every
 tool, tool-specific agent configs kept next to the tool. Nobody has a working
