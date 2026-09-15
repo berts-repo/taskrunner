@@ -11,7 +11,7 @@
 ```sh
 cargo build --release        # compile Taskrunner: one binary, target/release/taskrunner
 sh scripts/build-images.sh   # build the worker and firewall Docker images
-ln -s "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner   # put it on your PATH
+ln -sfn "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner   # put it on your PATH
 ```
 
 ## Connect your agents

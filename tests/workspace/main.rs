@@ -10,7 +10,7 @@ use taskrunner::storage::Recorder;
 use taskrunner::storage::artifacts::ArtifactStore;
 use taskrunner::storage::events::{EventBody, LogEvent};
 use taskrunner::workspace::clone::{CloneWorkspaces, WorkspaceProvider};
-use taskrunner::workspace::git::{ContainerGit, HostGit, InspectWith, WorkspaceGit};
+use taskrunner::workspace::git::{ContainerGit, InspectWith, WorkspaceGit};
 
 use crate::helpers::init_git_repo;
 

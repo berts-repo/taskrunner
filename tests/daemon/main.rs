@@ -101,6 +101,23 @@ async fn serves_read_only_query_routes_over_the_socket() {
 }
 
 #[tokio::test]
+async fn prints_usage_and_exits_0_for_every_way_of_asking_for_help() {
+    let (_dir, paths) = short_root();
+    for ask in ["--help", "-h", "help"] {
+        let out = tokio::process::Command::new(taskrunner_bin())
+            .args([ask, "--state-root"])
+            .arg(&paths.root)
+            .output()
+            .await
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{ask}: {stderr}");
+        assert!(stdout.starts_with("Usage: taskrunner"), "{ask}: {stdout}");
+    }
+}
+
+#[tokio::test]
 async fn a_query_command_exits_cleanly_when_its_reader_closes_the_pipe() {
     let (_dir, paths) = short_root();
     let daemon = start(&paths).await;

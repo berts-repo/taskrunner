@@ -252,6 +252,13 @@ fn matches_across_the_whole_corpus_and_attributes_worker_hits_to_their_task() {
 }
 
 #[test]
+fn labels_a_reply_hit_with_the_harness_that_wrote_it() {
+    let out = search(&seeded().index, "widget", 20, SearchFilters::default());
+    assert!(out.contains("Codex/message"), "{out}");
+    assert!(!out.contains("assistant/"), "{out}");
+}
+
+#[test]
 fn does_not_attribute_a_host_session_hit_to_any_task() {
     let out = search(&seeded().index, "chatter", 20, SearchFilters::default());
     assert!(out.contains("claude-code session host-1"));

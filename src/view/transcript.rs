@@ -181,11 +181,15 @@ fn header_label(m: &TranscriptMessage) -> String {
     }
 }
 
+fn display_role(m: &TranscriptMessage) -> String {
+    role_label(&m.role, &m.source)
+}
+
 /// A transcript's role says only "assistant". The ingest source records which
 /// harness wrote the reply, and in an archive that mixes harnesses that is the
 /// name worth reading.
-fn display_role(m: &TranscriptMessage) -> String {
-    if m.role == "assistant" { harness_name(&m.source) } else { m.role.clone() }
+pub(crate) fn role_label(role: &str, source: &str) -> String {
+    if role == "assistant" { harness_name(source) } else { role.to_string() }
 }
 
 /// Sources are free-form, so a name is its words capitalised; only the names

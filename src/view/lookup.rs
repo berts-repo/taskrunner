@@ -21,7 +21,7 @@ use crate::storage::index::StateIndex;
 use crate::view::render::inspection_warning;
 use crate::view::transcript::{
     DEFAULT_TOOL_LINES, MessageView, TranscriptView, compact_payload, render_messages,
-    render_outline, truncate,
+    render_outline, role_label, truncate,
 };
 use crate::workspace::git::task_branch;
 
@@ -453,7 +453,9 @@ pub fn search_transcripts(
         let ts = h.native_ts.as_deref().map_or(String::new(), |t| format!(" · {t}"));
         lines.push(format!(
             "  {where_}{proj} · {}/{} · prompt {}{ts}",
-            h.role, h.kind, h.prompt_idx
+            role_label(&h.role, &h.source),
+            h.kind,
+            h.prompt_idx
         ));
         lines.push(format!("    {}", hit_body(h)));
     }

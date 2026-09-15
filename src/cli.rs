@@ -160,7 +160,11 @@ pub fn parse_args(argv: &[String]) -> anyhow::Result<Args> {
     let mut root = std::env::var_os("TASKRUNNER_STATE_ROOT").map(PathBuf::from);
     let mut args = argv.iter();
     while let Some(arg) = args.next() {
-        if arg == "--state-root" {
+        // Help takes no value, so it must be caught before the rule that every
+        // other --flag does.
+        if arg == "--help" || arg == "-h" {
+            command = Some("help".to_string());
+        } else if arg == "--state-root" {
             let dir = args
                 .next()
                 .filter(|d| !d.is_empty())
@@ -286,7 +290,7 @@ pub async fn main(argv: &[String]) -> i32 {
             )
             .await
         }
-        None | Some("help" | "--help" | "-h") => say(USAGE)
+        None | Some("help") => say(USAGE)
             .map(|()| if args.command.is_none() { 1 } else { 0 })
             .map_err(anyhow::Error::from),
         Some(other) => {

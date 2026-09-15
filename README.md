@@ -29,7 +29,7 @@ Requires a Rust toolchain ([rustup](https://rustup.rs)) and Docker.
 ```sh
 cargo build --release
 sh scripts/build-images.sh
-ln -s "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner
+ln -sfn "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner
 taskrunner sync
 ```
 
