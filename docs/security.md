@@ -106,13 +106,23 @@ Each worker signs in once, into its own storage that only that worker uses.
   under `~/.taskrunner`. Taskrunner sends no telemetry and reports nothing anywhere.
 - **The daemon itself is trusted code** running as you, with your access. The worker is
   the untrusted part, and it's the part in the container.
+- **An agent's name on a connection is a label, not an identity.** Each agent is
+  registered as `taskrunner mcp --host <name>`, so skills fit that agent and the audit
+  trail says which one asked. The name is what the local registration says; it grants
+  nothing.
+- **Setting up an agent moves no credentials.** `taskrunner sync` asks each agent's own
+  CLI whether it's signed in and to register Taskrunner, and for Hermes it only prints
+  the lines to add — it never reads a login or edits another program's config file. The
+  skill files it writes are read-only, so an agent that tidies its own skills can't
+  quietly rewrite Taskrunner's.
 
 ## What gets written down
 
 Taskrunner keeps a durable audit trail, which is a security feature in its own right —
 after the fact, you can always establish what a task actually did.
 
-- **Every tool call your agent makes**, with its arguments.
+- **Every tool call your agent makes**, with its arguments, and every request for
+  Taskrunner's skills, with the agent that asked.
 - **Every event inside a worker turn** — each command, edit, and message, streamed as
   it happens, so even a crashed turn keeps its partial trail.
 - **Every network attempt**, allowed or refused.

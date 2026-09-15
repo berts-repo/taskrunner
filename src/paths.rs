@@ -14,6 +14,8 @@ pub struct StatePaths {
     pub config_file: PathBuf,
     pub ingest_state_file: PathBuf,
     pub ingest_staging_dir: PathBuf,
+    /// Taskrunner's skills, rendered per host: `skills/<host>/<skill>/SKILL.md`.
+    pub skills_dir: PathBuf,
     /// HTTP: `/status` and the read-only query routes.
     pub socket_path: PathBuf,
     /// One MCP session per connection, newline-delimited JSON-RPC.
@@ -38,6 +40,7 @@ pub fn state_paths(root: &Path) -> StatePaths {
         config_file: root.join("config.toml"),
         ingest_state_file: root.join("ingest-state.json"),
         ingest_staging_dir: root.join("ingest-staging"),
+        skills_dir: root.join("skills"),
         socket_path: runtime_dir.join("daemon.sock"),
         mcp_socket_path: runtime_dir.join("mcp.sock"),
         pid_file: runtime_dir.join("daemon.pid"),

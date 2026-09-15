@@ -45,6 +45,24 @@ pub fn git(cwd: &Path, args: &[&str]) -> GitOutput {
     }
 }
 
+/// The branch a task's commits landed on in the user's repository, if they
+/// did. Reads the user's own refs, never a worker's clone.
+pub fn task_branch(project_root: &Path, task_id: &str) -> Option<String> {
+    let branch = format!("taskrunner/{task_id}");
+    let refname = format!("refs/heads/{branch}");
+    git(project_root, &["rev-parse", "--verify", "--quiet", &refname]).ok.then_some(branch)
+}
+
+/// Paths with uncommitted changes, untracked files included, in the user's
+/// repository: what a task's clone, taken from the last commit, won't have.
+pub fn uncommitted_files(project_root: &Path) -> Vec<String> {
+    let status = git(project_root, &["status", "--porcelain=v1", "--untracked-files=all"]);
+    if !status.ok {
+        return vec![];
+    }
+    status.stdout.lines().filter_map(|line| line.get(3..)).map(str::to_string).collect()
+}
+
 /// Everything the host needs to know about a finished turn, read out of the
 /// workspace in one pass: which paths changed, the diff, the task branch's
 /// tip, and a bundle of the commits the host does not have yet.

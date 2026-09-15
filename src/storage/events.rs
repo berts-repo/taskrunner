@@ -62,6 +62,10 @@ pub enum EventBody {
         project_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client: Option<String>,
+        /// The harness the connection was registered as (`taskrunner mcp
+        /// --host`). The local shim says so itself: it labels, never authorizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
     },
 
     #[serde(rename = "session.ended")]

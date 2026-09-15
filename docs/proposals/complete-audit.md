@@ -203,6 +203,9 @@ search  = "on-request"     # Hermes remembers its own way; the archive is
 ingest  = "~/.hermes/state.db"   # searched only when the user asks for it
 ```
 
+`[host.<name>]` already exists with `connected` and `delegation`
+([Configuration](../configuration.md#harnesses)); the keys above are still to come.
+
 - `capture` — how this host's sessions reach the archive (the three modes above);
   `docker` adds a `mounts` allowlist.
 - `search` — when and what taskrunner's `search-transcripts` / `lookup-session`
@@ -227,25 +230,13 @@ Hermes's search ergonomics are still worth copying into taskrunner's tools for t
 hosts that rely on them: `role_filter` defaulting to `user,assistant`,
 scroll-around-a-message, browse-recent, demote (not hide) automation sessions.
 
-## Skills and agents across harnesses
+## Agents across harnesses
 
-**Skills: global by default.** Claude Code, Codex and Hermes all read the same
-`SKILL.md` format (the agentskills.io spec), so one copy can serve every harness.
-The user's machine already does this: Omarchy keeps its skills in one place and
-symlinks them into `~/.claude/skills/` and `~/.codex/skills/`; Hermes reads shared
-folders directly via `skills.external_dirs` and names `~/.agents/skills/` as the
-convention.
-
-```
-~/.agents/skills/            global — one copy, every harness
-~/.taskrunner/skills/        taskrunner's own (worker-login, …), also global
-[host.<name>].skills = [...] per-host extras, linked into that harness only
-```
-
-`taskrunner sync` symlinks the global set into each host's skills directory (and
-adds the `external_dirs` entry for Hermes), links per-host extras only where they
-belong, and removes links it made that are no longer wanted. Nothing is copied;
-editing a global skill changes it everywhere.
+Taskrunner's own skills landed: served over MCP (SEP-2640) and, for harnesses that
+can't fetch skills that way yet, linked by `taskrunner sync` — see
+[Getting started](../getting-started.md#connect-your-agents) and
+[Using Taskrunner](../tools.md#how-your-agent-knows-all-this). What remains here is
+agents.
 
 **Agents: per-harness by default.** There is no standard. Claude Code agents are
 markdown files under `~/.claude/agents/` (name, description, tools, model, system

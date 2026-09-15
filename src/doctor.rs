@@ -1,8 +1,9 @@
 //! `taskrunner doctor`: a read-only preflight over the pieces a delegated
 //! turn needs — Docker, worker images, auth volumes, the egress proxy image —
-//! plus ingestion health and best-effort worker-credential freshness. It
-//! reuses the same config-driven worker enumeration the daemon uses, so it can
-//! never drift from what actually runs. Nothing here mutates state.
+//! plus the harnesses set up with `taskrunner sync`, ingestion health, and
+//! best-effort worker-credential freshness. It reuses the same config-driven
+//! enumeration the daemon and sync use, so it can never drift from what
+//! actually runs. Nothing here mutates state.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -10,11 +11,12 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::client;
-use crate::config::{Config, HarnessKind, load_config, worker_config};
+use crate::config::{Config, HarnessKind, HostKind, load_config, worker_config};
 use crate::daemon::mcp::VERSION;
 use crate::harnesses::{default_image, ingest_sources, worker_kind, worker_names};
 use crate::ingest::sweep::expand_home;
 use crate::paths::StatePaths;
+use crate::sync::{self, Registration, SignIn};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Level {
@@ -214,6 +216,89 @@ fn parse_expiry(text: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(expires_at).ok().map(|t| t.timestamp_millis())
 }
 
+/// Each harness on this machine: set up by sync, signed in, registered as its
+/// host, and given the skills. Asks each harness's own status commands.
+fn check_harnesses(config: &Config, paths: &StatePaths, checks: &mut Vec<Check>) {
+    for host in HostKind::ALL {
+        let name = host.as_str();
+        let label = format!("harness {name}");
+        let installed = sync::installed(host);
+        let Some(settings) = config.host(host) else {
+            if installed {
+                checks.push(check(
+                    Level::Warn,
+                    label,
+                    "installed, not set up; run taskrunner sync",
+                ));
+            }
+            continue;
+        };
+        if !settings.connected {
+            checks.push(check(Level::Ok, label, "not connected (config.toml)"));
+            continue;
+        }
+        if !installed {
+            let detail = format!("connected in config.toml, but `{name}` is not on PATH");
+            checks.push(check(Level::Warn, label, detail));
+            continue;
+        }
+        checks.push(match sync::sign_in(host) {
+            SignIn::Yes => check(Level::Ok, format!("{label} sign-in"), "signed in"),
+            SignIn::No { login } => check(
+                Level::Warn,
+                format!("{label} sign-in"),
+                format!("not signed in; run `{login}`"),
+            ),
+            SignIn::Unknown(why) => check(Level::Warn, format!("{label} sign-in"), why),
+        });
+        let registration = format!("{label} registration");
+        checks.push(match sync::registration(paths, host) {
+            Registration::Current => {
+                check(Level::Ok, registration, sync::mcp_args(paths, host).join(" "))
+            }
+            Registration::Missing => check(
+                Level::Warn,
+                registration,
+                "taskrunner is not registered; run taskrunner sync",
+            ),
+            Registration::Outdated { .. } => {
+                check(Level::Warn, registration, "registered without --host; run taskrunner sync")
+            }
+        });
+        let skills = format!("{label} skills");
+        if sync::gets_skills_over_mcp(paths, host) {
+            checks.push(check(Level::Ok, skills, "served over MCP"));
+            continue;
+        }
+        checks.push(match sync::link_dir(host) {
+            None if sync::hermes_reads_skills(paths) => {
+                check(Level::Ok, skills, "read through skills.external_dirs")
+            }
+            None => check(
+                Level::Warn,
+                skills,
+                "skills.external_dirs doesn't list taskrunner's skills; run taskrunner sync for the lines to add",
+            ),
+            Some(dir) => {
+                let state = sync::link_state(paths, host, &dir);
+                if !state.foreign.is_empty() {
+                    let detail = format!(
+                        "not taskrunner's, or out of date: {}; run taskrunner sync",
+                        state.foreign.join(", ")
+                    );
+                    check(Level::Warn, skills, detail)
+                } else if !state.missing.is_empty() {
+                    let detail =
+                        format!("missing {}; run taskrunner sync", state.missing.join(", "));
+                    check(Level::Warn, skills, detail)
+                } else {
+                    check(Level::Ok, skills, format!("linked in {}", dir.display()))
+                }
+            }
+        });
+    }
+}
+
 fn check_ingest(config: &Config, paths: &StatePaths, checks: &mut Vec<Check>) {
     for source in ingest_sources(config) {
         if let Some(volume) = &source.volume {
@@ -267,6 +352,7 @@ pub async fn run_doctor(paths: &StatePaths) -> anyhow::Result<i32> {
     check_daemon(paths, &mut checks).await;
     let docker_up = check_docker(&mut checks);
     check_workers(&config, docker_up, &mut checks);
+    check_harnesses(&config, paths, &mut checks);
     check_ingest(&config, paths, &mut checks);
 
     for c in &checks {

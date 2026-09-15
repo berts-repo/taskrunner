@@ -45,6 +45,23 @@ the built-in codex ingest source scans `["~/.codex/sessions"]`.
   a `format` naming a built-in parser (`claude-code` or `codex`) and the host `dirs`
   to scan.
 
+## Harnesses
+
+The agents you run Taskrunner *from* — Claude Code, Codex and Hermes — each get a
+`[host.<name>]` section. `taskrunner sync` writes it the first time it meets that
+agent; after that it's yours to edit:
+
+```toml
+[host.claude]
+connected = true           # false: sync leaves this agent alone and stops asking
+delegation = "suggest"     # "suggest": offer to delegate when a task fits, then wait
+                           # for your yes. "on-request": only when you ask.
+```
+
+The names are `claude`, `codex` and `hermes`. After changing `delegation`, run
+`taskrunner sync` to update that agent's skills; skills an agent fetches over MCP pick
+the change up when the daemon restarts (`taskrunner down`).
+
 ## Good to know
 
 - **Every worker has resource limits.** The `[worker.<name>.limits]` ceilings

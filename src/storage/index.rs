@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, ToSql, params};
 use super::events::{EventBody, LogEvent};
 use super::facts::message_facts;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA: &str = r#"
 CREATE TABLE projects (
@@ -31,6 +31,7 @@ CREATE TABLE mcp_sessions (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),
   client TEXT,
+  host TEXT,
   started_at TEXT NOT NULL,
   ended_at TEXT
 );
@@ -214,10 +215,10 @@ impl StateIndex {
                     params![path, project_id],
                 )?;
             }
-            EventBody::SessionStarted { session_id, project_id, client } => {
+            EventBody::SessionStarted { session_id, project_id, client, host } => {
                 self.exec(
-                    "INSERT OR IGNORE INTO mcp_sessions (id, project_id, client, started_at) VALUES (?, ?, ?, ?)",
-                    params![session_id, project_id, client, ts],
+                    "INSERT OR IGNORE INTO mcp_sessions (id, project_id, client, host, started_at) VALUES (?, ?, ?, ?, ?)",
+                    params![session_id, project_id, client, host, ts],
                 )?;
             }
             EventBody::SessionEnded { session_id } => {

@@ -9,6 +9,7 @@ use std::time::Duration;
 #[path = "../helpers/mod.rs"]
 mod helpers;
 
+mod skills;
 mod tools;
 
 use rmcp::ServiceExt;

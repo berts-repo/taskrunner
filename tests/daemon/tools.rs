@@ -237,3 +237,57 @@ async fn refuses_arguments_the_schema_does_not_allow_before_running_anything() {
     assert!(!audited);
     st.close().await;
 }
+
+/// A git repository with one commit and one file that isn't committed.
+fn repo_with_uncommitted_work() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.path().join("committed.txt"), "in the last commit\n").unwrap();
+    git(&["add", "committed.txt"]);
+    git(&["commit", "-q", "-m", "first"]);
+    std::fs::write(repo.path().join("draft.txt"), "not committed\n").unwrap();
+    repo
+}
+
+#[tokio::test]
+async fn assign_task_names_uncommitted_files_and_lookup_task_names_the_landed_branch() {
+    let st = stack().await;
+    let repo = repo_with_uncommitted_work();
+    let project = repo.path().to_string_lossy().into_owned();
+    let assign = text(
+        &st.call(
+            "assign-task",
+            json!({ "project": project, "worker": "fake", "prompt": "make it so", "wait": true }),
+        )
+        .await,
+    );
+    assert!(assign.contains("not included: 1 uncommitted file(s)"), "{assign}");
+    assert!(assign.contains("  draft.txt"), "{assign}");
+    let task_id = task_id_in(&assign);
+    // The fake workspace lands nothing, so no branch yet.
+    assert!(!assign.contains("branch:"), "{assign}");
+
+    let branch = format!("taskrunner/{task_id}");
+    let created = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args(["branch", &branch])
+        .status()
+        .unwrap();
+    assert!(created.success());
+    let lookup = text(&st.call("lookup-task", json!({ "taskId": task_id })).await);
+    assert!(lookup.contains(&format!("branch: {branch}")), "{lookup}");
+    st.close().await;
+}

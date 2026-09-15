@@ -72,9 +72,28 @@ fn docker_runner_factory(config: Arc<Config>, store: SharedStore) -> Arc<MakeRun
 }
 use mcp::{McpService, SessionRecord};
 use sweep_gate::SweepGate;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::unix::OwnedReadHalf;
 use tools::ToolTable;
 
-use crate::config::{Config, load_config, worker_config};
+use crate::config::{Config, HostKind, load_config, worker_config};
+
+/// The optional first line a shim sends, `taskrunner-host <name>`, naming the
+/// harness the connection was registered for.
+pub const HOST_PREAMBLE: &str = "taskrunner-host ";
+
+/// Reads the host preamble, if the client sent one. JSON-RPC lines start with
+/// `{`, so any other first byte is the preamble. A client that sends none — a
+/// direct connection, or a registration made before `--host` existed — is
+/// served unlabelled.
+async fn read_host_preamble(reader: &mut BufReader<OwnedReadHalf>) -> Option<HostKind> {
+    if *reader.fill_buf().await.ok()?.first()? == b'{' {
+        return None;
+    }
+    let mut line = String::new();
+    reader.read_line(&mut line).await.ok()?;
+    HostKind::parse(line.trim_end().strip_prefix(HOST_PREAMBLE)?)
+}
 use crate::harnesses::{auth_mounts, build_harnesses, default_image, ingest_sources, worker_kind};
 use crate::ingest::sweep::{IngestSource, SweepStats, SweeperDeps, TranscriptSweeper};
 use crate::ingest::volume::{docker_copy_out, reap_copy_out_containers};
@@ -153,6 +172,11 @@ impl Daemon {
         let index_path = paths.index_db.to_string_lossy().into_owned();
         let index = rebuild_index(&index_path, &read_events(&paths.events_log)?)?;
         let config = load_config(&paths.config_file)?;
+        // Skills that harnesses read from disk follow the binary: an upgraded
+        // taskrunner rewrites them here, without anyone running sync.
+        if let Err(err) = crate::sync::write_skills(&paths, &config) {
+            eprintln!("taskrunner: could not refresh skills: {err:#}");
+        }
         let store = SharedStore::new(log, index);
         let artifacts = Arc::new(ArtifactStore::new(&paths.artifacts_dir));
 
@@ -298,13 +322,19 @@ impl Daemon {
 
     async fn serve_session(self, stream: tokio::net::UnixStream) {
         self.sessions.fetch_add(1, Ordering::Relaxed);
+        let (reader, writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let host = tokio::select! {
+            host = read_host_preamble(&mut reader) => host,
+            _ = self.shutdown.cancelled() => None,
+        };
         let session = Arc::new(SessionRecord::new());
         let service = McpService {
             daemon: self.clone(),
             tools: self.tools.clone(),
             session: session.clone(),
+            host,
         };
-        let (reader, writer) = stream.into_split();
         match service.serve_with_ct((reader, writer), self.shutdown.child_token()).await {
             Ok(running) => {
                 let _ = running.waiting().await;

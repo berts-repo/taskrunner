@@ -5,6 +5,8 @@
 //! worker's own session(s). Plus search-transcripts and lookup-session, which
 //! read the same archive.
 
+use std::path::Path;
+
 use crate::domain::errors::ToolError;
 use crate::domain::tasks::{
     MessageLimit, MessagePage, MessageQuery, SearchFilters, SessionInfo, SessionListQuery,
@@ -20,6 +22,7 @@ use crate::view::transcript::{
     DEFAULT_TOOL_LINES, MessageView, TranscriptView, compact_payload, render_messages,
     render_outline, truncate,
 };
+use crate::workspace::git::task_branch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Include {
@@ -219,7 +222,7 @@ fn apply_scope(
 }
 
 fn render_summary(s: &TaskSnapshot) -> String {
-    [
+    let mut lines = vec![
         format!("task: {}", s.task_id),
         format!("project: {}", s.project_root),
         format!("worker: {}{}", s.worker, native_session_suffix(s.worker_session_id.as_deref())),
@@ -227,8 +230,11 @@ fn render_summary(s: &TaskSnapshot) -> String {
         format!("about: {}", s.prompt_summary),
         format!("turns: {}", s.turn_count),
         format!("updated: {}", s.updated_at),
-    ]
-    .join("\n")
+    ];
+    if let Some(branch) = task_branch(Path::new(&s.project_root), &s.task_id) {
+        lines.push(format!("branch: {branch} (not merged — review it before merging)"));
+    }
+    lines.join("\n")
 }
 
 pub fn native_session_suffix(worker_session_id: Option<&str>) -> String {

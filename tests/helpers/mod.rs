@@ -35,6 +35,7 @@ pub fn sample_sequence() -> Vec<LogEvent> {
             session_id: "sess_a".into(),
             project_id: Some("proj_a".into()),
             client: Some("claude-code".into()),
+            host: None,
         }),
         evt(EventBody::TaskCreated {
             task_id: "task_a".into(),

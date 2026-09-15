@@ -53,6 +53,7 @@ fn open_truncates_a_torn_tail_so_new_appends_stay_valid() {
             session_id: "sess_a".into(),
             project_id: None,
             client: None,
+            host: None,
         })
         .unwrap();
     drop(reopened);

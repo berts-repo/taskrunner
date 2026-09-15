@@ -27,6 +27,71 @@ impl HarnessKind {
     }
 }
 
+/// A harness that runs taskrunner — the other direction from a worker, which
+/// taskrunner runs. `taskrunner sync` connects these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostKind {
+    Claude,
+    Codex,
+    Hermes,
+}
+
+impl HostKind {
+    pub const ALL: [HostKind; 3] = [HostKind::Claude, HostKind::Codex, HostKind::Hermes];
+
+    pub fn parse(name: &str) -> Option<HostKind> {
+        HostKind::ALL.into_iter().find(|host| host.as_str() == name)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HostKind::Claude => "claude",
+            HostKind::Codex => "codex",
+            HostKind::Hermes => "hermes",
+        }
+    }
+}
+
+/// When a host's agent reaches for the delegate-task skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Delegation {
+    /// Offer to delegate when a task fits, then wait for the user's yes.
+    #[default]
+    Suggest,
+    /// Delegate only when the user asks.
+    OnRequest,
+}
+
+impl Delegation {
+    pub fn parse(value: &str) -> Option<Delegation> {
+        match value {
+            "suggest" => Some(Delegation::Suggest),
+            "on-request" => Some(Delegation::OnRequest),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Delegation::Suggest => "suggest",
+            Delegation::OnRequest => "on-request",
+        }
+    }
+}
+
+/// `[host.<name>]`: written by `taskrunner sync` the first time it meets a
+/// harness, edited by hand after that. Strict, like ingest sources: a typo'd
+/// key would otherwise leave a harness behaving in a way nobody chose.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostConfig {
+    /// `false` records the user's "no", so sync stops asking.
+    pub connected: bool,
+    pub delegation: Delegation,
+}
+
 /// Local model server type; setting it puts the codex harness in --oss mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -194,6 +259,8 @@ pub struct Config {
     pub worker: IndexMap<String, WorkerConfig>,
     pub egress: EgressConfig,
     pub ingest: IngestConfig,
+    /// Keyed by `HostKind` name; `parse_config` rejects any other key.
+    pub host: IndexMap<String, HostConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -203,12 +270,23 @@ struct RawConfig {
     worker: IndexMap<String, RawWorker>,
     egress: EgressConfig,
     ingest: RawIngest,
+    host: IndexMap<String, HostConfig>,
 }
 
 impl Config {
     /// What an empty config file loads as: every default filled in.
     pub fn default_loaded() -> Config {
         parse_config("").expect("an empty config always parses")
+    }
+
+    pub fn host(&self, kind: HostKind) -> Option<&HostConfig> {
+        self.host.get(kind.as_str())
+    }
+
+    /// The delegation setting for a session's host. A session that didn't say
+    /// which harness it is gets the default.
+    pub fn delegation(&self, host: Option<HostKind>) -> Delegation {
+        host.and_then(|kind| self.host(kind)).map(|h| h.delegation).unwrap_or_default()
     }
 }
 
@@ -220,6 +298,9 @@ pub fn parse_config(text: &str) -> anyhow::Result<Config> {
             anyhow::bail!("worker.{name}.limits.cpus must be positive");
         }
     }
+    if let Some(name) = raw.host.keys().find(|name| HostKind::parse(name).is_none()) {
+        anyhow::bail!("host.{name} is not a harness taskrunner knows (claude, codex, hermes)");
+    }
     Ok(Config {
         task: raw.task,
         worker: with_builtin_workers(raw.worker),
@@ -228,6 +309,7 @@ pub fn parse_config(text: &str) -> anyhow::Result<Config> {
             interval_seconds: raw.ingest.interval_seconds,
             sources: with_builtin_sources(raw.ingest.sources)?,
         },
+        host: raw.host,
     })
 }
 

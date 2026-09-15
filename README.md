@@ -30,19 +30,19 @@ Requires a Rust toolchain ([rustup](https://rustup.rs)) and Docker.
 cargo build --release
 sh scripts/build-images.sh
 ln -s "$PWD/target/release/taskrunner" ~/.local/bin/taskrunner
-claude mcp add --scope user taskrunner -- "$HOME/.local/bin/taskrunner" mcp
-codex mcp add taskrunner -- "$HOME/.local/bin/taskrunner" mcp
+taskrunner sync
 ```
 
-Register with each agent you use — every agent keeps its own MCP server list. Then
-sign each worker in once (see [Getting started](docs/getting-started.md)) and
-ask your agent to delegate something. Full walkthrough, including the one-time worker
+`taskrunner sync` connects the agents on your machine — Claude Code, Codex, Hermes —
+to Taskrunner and gives them its skills, asking once about each. Then sign each worker
+in once (see [Getting started](docs/getting-started.md)) and ask your agent to delegate
+something. Full walkthrough, including the one-time worker
 login, is in the getting-started guide.
 
 ## Documentation
 
 - **[Getting started](docs/getting-started.md)** — install, build the worker images,
-  sign workers in, register with your agent, and run the health check.
+  connect your agents, sign workers in, and run the health check.
 - **[Using Taskrunner](docs/tools.md)** — the tools your agent uses to delegate,
   follow up, inspect, cancel, browse sessions, and search.
 - **[Configuration](docs/configuration.md)** — the optional `config.toml` and every

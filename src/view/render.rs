@@ -28,6 +28,20 @@ pub fn render_outcome(outcome: &TurnOutcome) -> String {
     if outcome.approval_state != "none" {
         lines.push(format!("approval: {}", outcome.approval_state));
     }
+    if let Some(branch) = &outcome.branch {
+        lines.push(format!("branch: {branch} (not merged — review it before merging)"));
+    }
+    if !outcome.uncommitted.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "not included: {} uncommitted file(s) — the worker's clone starts from the last commit:",
+            outcome.uncommitted.len()
+        ));
+        lines.extend(outcome.uncommitted.iter().take(10).map(|f| format!("  {f}")));
+        if outcome.uncommitted.len() > 10 {
+            lines.push(format!("  … and {} more", outcome.uncommitted.len() - 10));
+        }
+    }
     if let Some(summary) = outcome.summary.as_deref().filter(|s| !s.is_empty()) {
         lines.push(String::new());
         lines.push(summary.to_string());

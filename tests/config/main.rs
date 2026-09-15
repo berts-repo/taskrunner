@@ -3,7 +3,9 @@
 use std::num::NonZeroU64;
 use std::path::Path;
 
-use taskrunner::config::{Config, HarnessKind, Provider, load_config, parse_config, worker_config};
+use taskrunner::config::{
+    Config, Delegation, HarnessKind, HostKind, Provider, load_config, parse_config, worker_config,
+};
 use taskrunner::harnesses::{auth_mounts, ingest_sources, worker_kind, worker_names};
 use taskrunner::paths::state_paths;
 
@@ -158,4 +160,35 @@ fn state_paths_lay_out_the_root() {
     assert_eq!(paths.socket_path, Path::new("/s/runtime/daemon.sock"));
     assert_eq!(paths.lock_file, Path::new("/s/runtime/daemon.lock"));
     assert_eq!(paths.ingest_staging_dir, Path::new("/s/ingest-staging"));
+    assert_eq!(paths.skills_dir, Path::new("/s/skills"));
+}
+
+// ---- hosts: harnesses that run taskrunner ----------------------------------
+
+#[test]
+fn reads_host_settings_and_defaults_delegation_to_suggest() {
+    let config = parse_config(
+        r#"
+        [host.claude]
+        connected = true
+
+        [host.hermes]
+        connected = true
+        delegation = "on-request"
+        "#,
+    )
+    .unwrap();
+    assert!(config.host(HostKind::Claude).unwrap().connected);
+    assert_eq!(config.delegation(Some(HostKind::Claude)), Delegation::Suggest);
+    assert_eq!(config.delegation(Some(HostKind::Hermes)), Delegation::OnRequest);
+    // A harness sync never met, and a session that didn't name its harness.
+    assert_eq!(config.delegation(Some(HostKind::Codex)), Delegation::Suggest);
+    assert_eq!(config.delegation(None), Delegation::Suggest);
+}
+
+#[test]
+fn refuses_an_unknown_harness_and_a_stray_host_key() {
+    assert!(parse_config("[host.cursor]\nconnected = true\n").is_err());
+    assert!(parse_config("[host.claude]\nconected = true\n").is_err());
+    assert!(parse_config("[host.claude]\ndelegation = \"always\"\n").is_err());
 }

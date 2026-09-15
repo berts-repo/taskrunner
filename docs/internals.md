@@ -26,6 +26,11 @@ maintainer reference — the "why it's built this way" behind the features descr
 - The `mcp` command is a thin stdio shim. It pumps the client's stdio byte for byte
   to one daemon's `runtime/mcp.sock`, auto-starting the daemon if needed, so any
   number of MCP clients share one daemon.
+- **A connection can name its harness.** `taskrunner mcp --host <name>` makes the shim
+  send one line, `taskrunner-host <name>`, before any JSON-RPC. The daemon reads it (a
+  first byte of `{` means there is none) and records `host` on `session.started`
+  (index schema 8). It labels the session, for rendering skills and for the audit
+  trail; the owner-only socket is still the only access control.
 - **A connection is a session.** Each connection gets its own MCP service and its own
   `session.started`/`session.ended` records. MCP protocol `2026-07-28` removes
   protocol-level sessions, so the session record can't lean on the SDK's HTTP session
@@ -35,6 +40,20 @@ maintainer reference — the "why it's built this way" behind the features descr
 - **The tool contract is data.** `src/daemon/tools.json` holds the six tools' names,
   descriptions and input schemas, served verbatim and used to validate every call.
   Invalid arguments are a protocol error: the tool never runs and nothing is audited.
+- **Skills are compiled in and leave two ways.** `skills/<name>/SKILL.md` is embedded
+  in the binary (`src/skills.rs`), and `delegate-task`'s description is rendered from
+  the host's `delegation` setting. Over MCP the daemon declares the resources
+  capability and the `io.modelcontextprotocol/skills` extension (SEP-2640), answers
+  `skills/list` and `skills/get` as custom methods, and serves each file as
+  `skill://<name>/SKILL.md`, rendered for the session's host. Entries carry the SEP's
+  per-file `resources` digests plus a top-level `digest`, which Claude Code 2.1's
+  pre-final client checks. For harnesses that can't fetch skills yet, `taskrunner sync`
+  writes the same rendering under `skills/<host>/` as read-only files and links it into
+  the harness; the daemon rewrites those files on boot, so an upgrade needs no sync.
+  Skills requests are audited (`skills.list`, `skills.get`, `resource.read`); a
+  `skills.list` from a host within the last week is how sync knows to drop that host's
+  links. A week rather than the latest session, because `claude mcp get` health-checks
+  the server with a session that fetches nothing.
 - **`sun_path` limit.** A unix socket path is capped around 104 bytes on macOS. State
   roots with long paths fail fast with a clear error rather than a confusing bind
   failure; tests and any throwaway state roots must use short paths.
@@ -274,4 +293,6 @@ browser or IDE does **not** rewrite `~/.codex/auth.json`; only the CLI login flo
 
 After a rebuild, run `taskrunner down` so a stale daemon isn't left running old code.
 A mid-session restart drops the MCP tools until the client reconnects (`/mcp` in
-Claude Code), because the shim's connection to the old daemon is gone.
+Claude Code), because the shim's connection to the old daemon is gone. A restart is
+also how a changed `[host.<name>] delegation` reaches skills served over MCP (the
+daemon reads config at boot); `taskrunner sync` rewrites the skills on disk at once.

@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 
 use crate::client;
+use crate::config::HostKind;
 use crate::daemon::mcp::VERSION;
 use crate::daemon::{AlreadyRunning, Daemon, DaemonOptions};
 use crate::doctor::run_doctor;
 use crate::paths::{StatePaths, default_root, state_paths};
 use crate::shim::run_shim;
+use crate::sync::{SyncOptions, run_sync};
 
 pub const USAGE: &str = "Usage: taskrunner <command> [args] [--state-root <dir>]
 
@@ -22,8 +24,14 @@ Commands:
   up        Start the Taskrunner daemon in the foreground.
   down      Stop the running daemon.
   status    Report daemon status.
-  doctor    Diagnose Docker, worker images/auth, and ingestion health.
-  mcp       Run the stdio MCP shim (auto-starts the daemon).
+  doctor    Diagnose Docker, worker images/auth, harness setup, and ingestion.
+  sync [--connect claude,codex] [--skip hermes] [--delegation suggest|on-request]
+            Connect the agent harnesses on this machine to taskrunner and give
+            them its skills. Asks once about each new harness; the flags
+            answer instead. Safe to run again.
+  mcp [--host claude|codex|hermes]
+            Run the stdio MCP shim (auto-starts the daemon). --host names the
+            harness it serves.
 
 Query (read the ingested corpus without an MCP session):
   sessions [--project P] [--limit N]
@@ -175,7 +183,25 @@ pub async fn main(argv: &[String]) -> i32 {
         Some("down") => down(&args.paths).await,
         Some("status") => status(&args.paths).await,
         Some("doctor") => run_doctor(&args.paths).await,
-        Some("mcp") => run_shim(&args.paths).await,
+        Some("mcp") => {
+            let host = match args.flag("host") {
+                None => None,
+                Some(name) => match HostKind::parse(&name) {
+                    Some(host) => Some(host),
+                    None => {
+                        eprintln!(
+                            "taskrunner: --host must be claude, codex or hermes, not '{name}'"
+                        );
+                        return 1;
+                    }
+                },
+            };
+            run_shim(&args.paths, host).await
+        }
+        Some("sync") => {
+            SyncOptions::parse(args.flag("connect"), args.flag("skip"), args.flag("delegation"))
+                .and_then(|options| run_sync(&args.paths, &options))
+        }
         Some("sessions") => {
             read_query(
                 &args.paths,

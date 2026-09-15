@@ -25,10 +25,14 @@ isn't blocked; ask it to **wait** if you want the result inline. If the work nee
 more network access than the worker's default, that's requested here too (see
 [Network access](network-access.md)).
 
+The worker's copy starts from your **last commit**. If you have uncommitted changes, the
+result lists them under **not included**, so your agent can ask whether to commit first.
+
 ### `lookup-task` — see what happened
 
 Fetches a task. By default you get a compact summary (status, worker, how many
-turns). Ask for more detail with **include**:
+turns, and the **branch** its commits landed on — `taskrunner/<task>`, never merged into
+yours). Ask for more detail with **include**:
 
 - **turns** — the paired prompt/response exchanges.
 - **transcript** — the worker's interior: the tool calls, reasoning, and messages
@@ -88,7 +92,18 @@ by kind of message — and sort by relevance or most-recent. See
 
 ## How your agent knows all this
 
-When your agent connects, Taskrunner hands it a short cheat-sheet built from your live
-configuration — the available workers, their default network reach, the approval
-rules, and the task lifecycle. So any agent that reads its server instructions already
-knows what it can delegate and to whom, with no extra setup from you.
+Three things reach your agent, and not all of them reach every agent:
+
+- **The tool descriptions.** Every agent reads these, so the rules that must always
+  hold — like asking you before granting a task network access — live there.
+- **Skills**: routines your agent loads when a task calls for one. **delegate-task**
+  (when and how to hand work off, and how to review what comes back),
+  **archive-search** (find, then read one exchange), **worker-login**, and
+  **setup-harness**. `taskrunner sync` gives them to each agent (see
+  [Getting started](getting-started.md#connect-your-agents)). Taskrunner also serves
+  them over MCP — the `io.modelcontextprotocol/skills` extension — to agents that fetch
+  skills that way. For `delegate-task`, the description says whether to offer
+  delegating or wait to be asked, from that agent's `delegation` setting.
+- **A short cheat-sheet** built from your live configuration — the available workers
+  and their default network reach — sent when your agent connects. Claude Code shows it
+  to the model; not every agent does, which is why nothing essential lives only there.

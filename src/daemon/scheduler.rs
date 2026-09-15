@@ -3,7 +3,7 @@
 //! networked tasks need a relayed user approval before they run.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ use crate::storage::store::SharedStore;
 use crate::workers::harness::{TurnRequest, WorkerHarness};
 use crate::workers::runner::WorkerRunner;
 use crate::workspace::clone::WorkspaceProvider;
+use crate::workspace::git::{task_branch, uncommitted_files};
 
 /// Result contract shared by assign-task and continue-task.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +41,11 @@ pub struct TurnOutcome {
     pub changed_files: Vec<String>,
     pub artifacts: Vec<ArtifactHandle>,
     pub error: Option<TurnErrorInfo>,
+    /// The branch the task's commits landed on in the user's repository.
+    pub branch: Option<String>,
+    /// Files uncommitted in the user's repository when the task was assigned.
+    /// The worker's clone starts from the last commit, so it doesn't have them.
+    pub uncommitted: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,7 +207,14 @@ impl Scheduler {
                 session_id: args.session_id.clone(),
             })?;
         }
-        self.start_turn(task_id, project.root, harness, args.prompt, args.wait).await
+        let root = PathBuf::from(&project.root);
+        let uncommitted = tokio::task::spawn_blocking(move || uncommitted_files(&root))
+            .await
+            .map_err(|err| ToolError::new(ErrorCode::InternalError, err.to_string()))?;
+        let mut outcome =
+            self.start_turn(task_id, project.root, harness, args.prompt, args.wait).await?;
+        outcome.uncommitted = uncommitted;
+        Ok(outcome)
     }
 
     pub async fn continue_task(
@@ -547,6 +560,9 @@ impl Scheduler {
             }),
             _ => None,
         });
+        // Git runs outside the store lock.
+        drop(store);
+        let branch = task_branch(Path::new(&snapshot.project_root), task_id);
         Ok(TurnOutcome {
             task_id: task_id.into(),
             turn_id: turn
@@ -562,6 +578,8 @@ impl Scheduler {
             changed_files: turn.as_ref().map(|t| t.changed_files.clone()).unwrap_or_default(),
             artifacts,
             error,
+            branch,
+            uncommitted: vec![],
         })
     }
 }
