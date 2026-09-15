@@ -41,7 +41,7 @@ struct Provider {
 /// point it at. The one test that hands git a repository written against it
 /// uses the real [`ContainerGit`] instead.
 fn make_provider() -> Provider {
-    provider_with(Arc::new(HostGit))
+    provider_with(Arc::new(ContainerGit::new("docker")))
 }
 
 fn provider_with(git: Arc<dyn WorkspaceGit>) -> Provider {
