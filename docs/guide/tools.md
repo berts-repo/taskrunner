@@ -104,8 +104,9 @@ Three things reach your agent, and not all of them reach every agent:
   hold — like asking you before granting a task network access — live there.
 - **Skills**: routines your agent loads when a task calls for one. **delegate-task**
   (when and how to hand work off, and how to review what comes back),
-  **archive-search** (find, then read one exchange), **worker-login**, and
-  **setup-harness**. `taskrunner sync` gives them to each agent (see
+  **archive-search** (find, then read one exchange), **handoff** (writes `HANDOFF.md`,
+  a note you paste into a fresh session), **worker-login**, and **setup-harness**.
+  `taskrunner sync` gives them to each agent (see
   [Getting started](getting-started.md#connect-your-agents)). Taskrunner also serves
   them over MCP — the `io.modelcontextprotocol/skills` extension — to agents that fetch
   skills that way. For `delegate-task`, the description says whether to offer

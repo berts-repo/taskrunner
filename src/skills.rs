@@ -21,9 +21,10 @@ use crate::config::Delegation;
 pub const EXTENSION: &str = "io.modelcontextprotocol/skills";
 
 /// Directory name and SKILL.md of every built-in skill.
-const SOURCES: [(&str, &str); 4] = [
+const SOURCES: [(&str, &str); 5] = [
     ("archive-search", include_str!("../skills/archive-search/SKILL.md")),
     ("delegate-task", include_str!("../skills/delegate-task/SKILL.md")),
+    ("handoff", include_str!("../skills/handoff/SKILL.md")),
     ("setup-harness", include_str!("../skills/setup-harness/SKILL.md")),
     ("worker-login", include_str!("../skills/worker-login/SKILL.md")),
 ];

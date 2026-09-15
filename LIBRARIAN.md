@@ -16,6 +16,9 @@ with that process.
 - `skills/*/SKILL.md` are product code, built into the binary and served to agents.
   They are not documents to reorganise, but a change in what a skill should tell an
   agent updates the skill in the same commit.
+- `HANDOFF.md` at the root, when present, is a scratch note the `handoff` skill
+  rewrites for the user to paste into a fresh session. It is excluded from git and is
+  not a document: leave it alone.
 - Doc paths also appear in code: error messages and comments (for example
   `src/storage/events.rs`). A move searches `src/` and `tests/` as well as the docs.
 - A dated one-off report, such as an investigation or a handoff, carries an ISO date
