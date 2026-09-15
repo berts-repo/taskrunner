@@ -12,8 +12,11 @@ The system should be **completely auditable**: every prompt, tool call, tool res
 and model response, from every harness — Claude Code, Codex, Hermes, and whatever
 comes next — lands in one archive that can be queried later, with no holes.
 
-Taskrunner's archive already does this for Claude Code and Codex (the sweeper plus
-`search-transcripts` / `lookup-session` over MCP). Hermes ships its own equivalent:
+Taskrunner already archives supported conversation records saved by Claude Code and
+Codex (the sweeper plus `search-transcripts` / `lookup-session` over MCP). This
+includes tool activity and saved reasoning, but is not a complete network capture: it
+cannot recover instructions, response fields, or other traffic the harness did not
+save or the parser did not retain. Hermes ships its own equivalent:
 every session goes to `~/.hermes/state.db` (SQLite + FTS5, `messages` table with
 role/content/tool_calls/tool_name) and a `session_search` tool reads it back. That
 raised the question that started this: *in Hermes, should taskrunner's archive be
@@ -51,11 +54,13 @@ file ingestion everywhere else; both feed one archive.
 
 ### Workers (delegated turns)
 
-Wire capture, on by default. The egress proxy already stands between every worker
+Wire capture is configurable; its default remains an open decision. This supersedes
+the earlier always-on worker capture direction. The egress proxy already stands between every worker
 container and the world; it grows from "CONNECT and forward" to "terminate, record,
 re-encrypt." Taskrunner generates the CA once and bakes it into the worker images at
 `scripts/build-images.sh`. Zero setup for the user, and it covers the part of the audit
-only taskrunner can see — every tool call inside a delegated turn.
+that transcripts may omit — requests and responses passing through that proxy.
+Disabling recording must preserve worker egress restrictions.
 
 ### Host sessions (the harness you talk to)
 
@@ -81,6 +86,125 @@ Three ways to run it, chosen at install and changeable any time:
    an SSH key, a tools directory) and records them in config; `taskrunner shell`
    mounts only those. Everything else in the home directory stays invisible.
 
+## Optional network capture — proposed 2026-09-15
+
+### Why
+
+The owner wants to inspect what a harness actually sends to a model server and what
+comes back, including context that is absent from the visible chat. They also want
+to turn this extra recording on or off through configuration or a command to control
+storage growth. This is a proposal only; it does not authorize implementation.
+
+The normal transcript archive continues independently. Capture off means no new
+network bodies are recorded; it does not turn off transcript ingestion or delete
+previous captures. The existing archive can already be large from tool output,
+message copies used by full-text search, and SQLite's write journal. Its size alone
+is not evidence that full network requests have been recorded.
+
+### Proposed controls
+
+Command names and config keys below are a draft. Commands update the same config
+that the user can edit directly; there is no separate hidden setting.
+
+```sh
+taskrunner capture enable --workers
+taskrunner capture disable --workers
+taskrunner capture enable --host claude
+taskrunner capture disable --host claude
+taskrunner capture status
+```
+
+```toml
+[capture]
+workers = false             # example, not an approved default
+
+[host.claude]
+capture = "files"           # existing proposed modes: files, proxy, docker
+
+[retention]
+raw_days = 7                # proposed retention for network bodies; 0 keeps none
+```
+
+For hosts, enable selects proxy mode and disable returns to files mode. Preserve
+and restore pre-existing harness proxy settings; do not remove unrelated user
+settings. Docker execution and recording must be independent choices: switching
+recording off must not change mounts or containment. The exact config key for
+recording inside `taskrunner shell` remains to be designed.
+
+`status` should show configured and effective capture for each scope, whether the
+proxy is ready, any restart required, retention settings, and disk space used by
+capture bodies separately from the event log, database, and database write journal.
+It must distinguish “enabled in config” from “traffic is actually being captured.”
+
+Changes take effect at request boundaries. A request already being captured can
+finish under its starting policy; status reports any in-flight captures after
+disable. Host setup changes may require restarting the harness, which the command
+must explain. Enabling capture on an unsupported transport must fail clearly rather
+than promise coverage. Capture state changes and recording failures leave audit
+events; a full disk must never silently produce an apparently complete capture.
+
+### What the user can inspect
+
+A proposed `taskrunner capture list` lists captured calls. A proposed
+`taskrunner capture show <call-id>` displays the outgoing request and incoming
+response, with request time, destination, model when available, and session/task
+links when known. Unknown links stay unknown rather than being guessed.
+
+Inspection includes saved system instructions, tool definitions, conversation
+context and tool results in requests, and text/tool calls and usage fields in
+responses when present. Streaming responses are reassembled for reading; the UI
+labels normalized views, redactions, incomplete streams, unsupported formats, and
+expired bodies. It never describes a transcript reconstruction as a raw capture.
+
+Coverage means traffic actually routed through the capture proxy. Supporting any
+harness is the goal; transport compatibility and provider-specific parsing still
+need validation. Capture cannot reveal internal server processing that was never
+returned to the client.
+
+### Storage and retention
+
+- Keep redacted network bodies as compressed, content-addressed artifacts outside
+  SQLite and the append-only event log. Store call metadata, artifact references,
+  hashes and lifecycle events in the log; derive the searchable index from them.
+- Apply the existing redaction decision before persistence, including bodies and
+  streamed content. Never persist authentication headers. Label saved bodies as
+  redacted, not byte-for-byte originals; distinguish original-body hashes from
+  stored-artifact hashes.
+- Reuse unchanged content and index normalized messages once, following the storage
+  design below. Compression alone does not eliminate repeated conversation history.
+- Turning capture off stops additional capture growth; it does not reclaim existing
+  files or stop the ordinary archive growing.
+- `raw_days` expires body artifacts through logged retention events. Keep minimal
+  call metadata so later inspection explains why a body is unavailable. Pruning
+  must respect artifacts shared by multiple calls and must not rewrite past events.
+- Offer explicit removal of existing capture bodies, with a preview of scope and
+  reclaimable space, separately from the enable/disable commands. Do not remove the
+  normal transcript archive as a side effect.
+
+Retention bounds age, not bytes. A hard capture storage limit and the behavior when
+it is reached remain open decisions. No claim of bounded total archive size follows
+from `raw_days`: the normal event log and retained normalized content still grow.
+
+### Decisions still needed
+
+- Worker capture default: recommend off to conserve space, but the owner has not
+  approved a default. Host capture remains opt-in as already proposed.
+- Approve command/config spelling and the independent Docker recording setting.
+- Choose raw-body retention, any byte limit, and behavior on recording failure:
+  block the request or continue with an explicit audit gap.
+- Define how much capture-derived normalized content survives body expiry. A hash
+  alone cannot reconstruct an expired request, and retained text still costs space.
+
+### Acceptance checks before shipping
+
+Verify config and commands agree; enable/disable work for workers and supported
+hosts; disabling capture preserves transcript ingestion and worker network isolation;
+status reflects effective state; request/response inspection handles streamed and
+failed calls; secrets are redacted before writes; and expiry removes only eligible
+body artifacts while keeping an accurate, replayable audit trail. Measure disk growth
+with repeated conversation context and demonstrate what disabling and pruning each
+save. Update the reference, user guide, and security documentation with implementation.
+
 ## Decided: what the wire capture stores
 
 Every API call re-sends the whole conversation, so raw capture is quadratic in the
@@ -91,9 +215,10 @@ call; store what is new per call **plus a hash of every full request body**.
 **Decision: the third.** Per call, the proxy keeps the messages past the common
 prefix with the previous request, the response (streamed chunks reassembled), the
 system prompt once by content hash, and a SHA-256 of the complete request body.
-Storage is linear again, each message is searched once, and any call's exact input
-to the model can still be *proven* — hash matches or it doesn't — without being
-stored. Raw bodies may be kept for a short debugging window (7 days), then dropped
+This aims to avoid repeated storage and search hits. A full-request hash can
+verify a separately supplied original body; it cannot reconstruct that body or show
+its exact input after the body expires. Compaction, changed prefixes, tool schemas,
+and redaction require explicit handling before claiming lossless reconstruction. Raw bodies may be kept for a short debugging window (7 days), then dropped
 by a logged `retention.pruned` event, never silently.
 
 This also settles **same message, two witnesses**: wire capture then produces
@@ -145,7 +270,7 @@ taskrunner setup
     Run it inside Docker?                    [no]
       Paths it may see besides the project:  ~/.gitconfig, ...
     Record its sessions through the proxy?   [no]   (needs the daemon service)
-  Worker capture is always on.
+  Record worker model traffic?               [default TBD]
 ```
 
 Every answer becomes a `[host.<name>]` key (see below), not a lock-in.
