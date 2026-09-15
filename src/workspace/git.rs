@@ -418,6 +418,17 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        // Tests run on parallel threads, and a child forked by another thread
+        // while this file was open for writing keeps it open until it execs;
+        // executing it before then fails with "text file busy". Probe until
+        // it runs, so the test proper never hits that window.
+        for _ in 0..100 {
+            if Command::new(&script).arg("probe").output().is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = fs::remove_file(&log);
         (script.display().to_string(), log)
     }
 
