@@ -85,7 +85,7 @@ pub enum EventBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tier: Option<String>,
         /// Legacy (removed host-run flow): never emitted anymore, kept so old
-        /// logs still parse — `read_events` stops at the first unparseable line.
+        /// logs still parse — a line that does not parse stops the daemon.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         runtime: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,41 +221,57 @@ pub fn parse_event_line(line: &str) -> serde_json::Result<LogEvent> {
     serde_json::from_str(line)
 }
 
-/// Reads all valid events. Stops silently at the first unparseable line: the
-/// log is append-only, so anything after a torn line is a torn tail from a
-/// crash mid-append.
+/// Reads every event. An unterminated last line is a write a crash cut short
+/// and is left out; a complete line that is not an event is damage, and an
+/// error.
 pub fn read_events(path: &Path) -> io::Result<Vec<LogEvent>> {
     let content = match fs::read(path) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    Ok(valid_lines(&content).map(|(_, event)| event).collect())
+    Ok(parse_log(path, &content)?.0)
 }
 
-/// Every parseable complete line from the top of the log, paired with the byte
-/// offset just past it, ending at the first line that is torn or corrupt.
-fn valid_lines(content: &str) -> impl Iterator<Item = (usize, LogEvent)> + '_ {
+/// The log's events, and the byte offset where its complete lines end.
+fn parse_log(path: &Path, content: &str) -> io::Result<(Vec<LogEvent>, usize)> {
+    let mut events = Vec::new();
     let mut offset = 0;
-    std::iter::from_fn(move || {
-        let newline = content[offset..].find('\n')?; // no newline: unterminated tail
+    while let Some(newline) = content[offset..].find('\n') {
         let line = &content[offset..offset + newline];
-        let event = parse_event_line(line).ok()?;
+        let event = parse_event_line(line).map_err(|err| damaged(path, events.len() + 1, err))?;
+        events.push(event);
         offset += newline + 1;
-        Some((offset, event))
-    })
+    }
+    Ok((events, offset))
 }
 
-/// Truncates any torn tail so new appends land after the last valid record.
+/// Repairing a damaged line would mean discarding it and every line after
+/// it — the loss an audit log exists to prevent — so the choice is left to
+/// the person who owns the log.
+fn damaged(path: &Path, line: usize, err: serde_json::Error) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{}: line {line} is not a valid event ({err}). Taskrunner will not start on a \
+             damaged log: repairing it would discard that line and every line after it. See \
+             docs/log-integrity.md, \"If the daemon refuses to start\".",
+            path.display()
+        ),
+    )
+}
+
+/// Removes an unterminated last line, a write a crash cut short, so new
+/// appends start on a line of their own. Fails on a damaged line instead.
 fn repair_torn_tail(path: &Path) -> io::Result<()> {
     let content = match fs::read(path) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
-    let valid_end = valid_lines(&content).last().map_or(0, |(end, _)| end);
-    if valid_end < content.len() {
-        File::options().write(true).open(path)?.set_len(valid_end as u64)?;
+    let (_, complete) = parse_log(path, &content)?;
+    if complete < content.len() {
+        File::options().write(true).open(path)?.set_len(complete as u64)?;
     }
     Ok(())
 }

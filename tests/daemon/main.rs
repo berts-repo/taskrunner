@@ -185,6 +185,22 @@ async fn a_query_command_exits_cleanly_when_its_reader_closes_the_pipe() {
 }
 
 #[tokio::test]
+async fn refuses_to_start_on_a_damaged_log_and_says_which_line() {
+    let (_dir, paths) = short_root();
+    std::fs::write(&paths.events_log, "not json at all\n").unwrap();
+    let options = DaemonOptions { ingest_sources: Some(vec![]), ..Default::default() };
+    let err = Daemon::start(paths.clone(), options).await.err().expect("a damaged log stops boot");
+    let message = format!("{err:#}");
+    assert!(message.contains("line 1"), "{message}");
+    assert!(message.contains("log-integrity.md"), "{message}");
+    assert_eq!(std::fs::read_to_string(&paths.events_log).unwrap(), "not json at all\n");
+
+    // The refusal releases the lock, so the daemon starts once the log is fixed.
+    std::fs::write(&paths.events_log, "").unwrap();
+    start(&paths).await.stop().await;
+}
+
+#[tokio::test]
 async fn refuses_a_second_daemon_on_the_same_state_root() {
     let (_dir, paths) = short_root();
     let first = start(&paths).await;

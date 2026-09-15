@@ -62,21 +62,39 @@ fn open_truncates_a_torn_tail_so_new_appends_stay_valid() {
     assert!(!fs::read_to_string(&path).unwrap().contains("evt_torn"));
 }
 
-#[test]
-fn open_drops_everything_after_an_interior_corrupt_line() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("events.jsonl");
-    let mut first = EventLog::open(&path).unwrap();
-    let a = first.append(project_created()).unwrap();
+/// One good event, a damaged line, and a good event after it.
+fn log_with_a_damaged_second_line(path: &std::path::Path) {
+    let mut first = EventLog::open(path).unwrap();
+    first.append(project_created()).unwrap();
     drop(first);
-    append(&path, "not json at all\n");
+    append(path, "not json at all\n");
     append(
-        &path,
+        path,
         "{\"id\":\"evt_after\",\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session.ended\",\"session_id\":\"sess_a\"}\n",
     );
+}
 
-    drop(EventLog::open(&path).unwrap());
-    assert_eq!(read_events(&path).unwrap(), vec![a]);
+#[test]
+fn open_refuses_a_damaged_line_and_leaves_every_line_in_place() {
+    // Repairing would mean discarding the damaged line and everything after
+    // it: the loss an audit log exists to prevent.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    log_with_a_damaged_second_line(&path);
+    let before = fs::read(&path).unwrap();
+
+    let err = EventLog::open(&path).err().expect("a damaged log does not open");
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(fs::read(&path).unwrap(), before, "nothing was cut");
+}
+
+#[test]
+fn reading_a_damaged_line_is_an_error_not_the_end_of_the_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    log_with_a_damaged_second_line(&path);
+    let err = read_events(&path).expect_err("a damaged line is not silently skipped");
+    assert!(err.to_string().contains("line 2"), "{err}");
 }
 
 #[test]

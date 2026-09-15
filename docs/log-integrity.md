@@ -189,15 +189,52 @@ lsattr ~/.taskrunner/anchors.jsonl        # shows an "a" in the flags
    how far back the change reaches.
 3. Compare with a backup, or with anchors you saved, to narrow down when it happened.
 
-Two failures have innocent causes:
+One failure has an innocent cause: **"line N of the anchors file is not an anchor"** can
+follow a crash in the instant an anchor was being written. Taskrunner starts a fresh line
+after it, so nothing later is affected; the torn line keeps being reported until you
+remove it (after `sudo chattr -a` if you set the flag).
 
-- **"line N of the anchors file is not an anchor"** can follow a crash in the instant an
-  anchor was being written. Taskrunner starts a fresh line after it, so nothing later is
-  affected; the torn line keeps being reported until you remove it (after `sudo chattr -a`
-  if you set the flag).
-- **"events were removed"** also happens if a damaged line appears in the middle of the
-  record: when the daemon starts, it cuts the record at the first line it can't read. That
-  is still a real loss worth investigating — the anchor is doing its job by reporting it.
+## If the daemon refuses to start
+
+If a line in the record is damaged — present, but not a valid entry — Taskrunner refuses
+to start and tells you which line, instead of repairing the file. Repairing would mean
+deleting that line and every line after it, which is exactly the loss the record exists
+to prevent, so the decision is yours.
+
+What you see: `taskrunner up` stops with a message like
+
+```
+taskrunner: /home/you/.taskrunner/events.jsonl: line 9123 is not a valid event (…).
+Taskrunner will not start on a damaged log: repairing it would discard that line and
+every line after it. See docs/log-integrity.md, "If the daemon refuses to start".
+```
+
+and your agents' Taskrunner tools are unavailable until it starts again.
+
+1. **Copy `~/.taskrunner` somewhere safe** before changing anything.
+2. **Look at the line** (the first 500 characters are usually enough):
+
+   ```sh
+   sed -n '9123p' ~/.taskrunner/events.jsonl | head -c 500
+   ```
+
+3. **Run `taskrunner verify`.** It still works while the daemon is stopped and shows how
+   the damage relates to the chain and your anchors.
+4. **Then choose one:**
+   - **Restore** `events.jsonl` from a backup, if you have one from before the damage.
+   - **Fix the line by hand** if the damage is obvious, such as a few stray characters. If
+     your fix restores the exact original, `verify` passes again; otherwise it keeps
+     reporting the break at that line, which is an honest record of what happened.
+   - **Cut the record at that line** as a last resort, knowing everything after it is
+     lost and every later anchor will report removed events:
+
+     ```sh
+     head -n 9122 ~/.taskrunner/events.jsonl > ~/.taskrunner/events.cut
+     mv ~/.taskrunner/events.cut ~/.taskrunner/events.jsonl
+     ```
+
+A crash in the middle of a write can leave the *last* line incomplete. That line was never
+a whole entry, so Taskrunner removes it by itself and starts normally.
 
 ---
 
@@ -273,9 +310,10 @@ archive (most are conversation messages), so around 4%. Opening the log and runn
 `verify` hash the whole file once. An 18 MB log verifies in about 0.04 seconds, so a log
 of a few hundred megabytes takes around a second.
 
-### Relation to the startup repair
+### Damaged lines
 
-`EventLog::open` truncates the log at the first line that doesn't parse, which exists to
-discard a torn tail after a crash but also cuts after a corrupt line in the middle.
-Chaining does not change that behaviour; it makes the loss visible, because every anchor
-past the new end reports removed events.
+`EventLog::open` removes an unterminated final line: a write a crash cut short, which was
+never a whole event. A complete line that doesn't parse is damage, not a torn write:
+`open` and `read_events` return an error naming the line and leave the file untouched, so
+the daemon refuses to start. Earlier versions truncated the log at the first unparseable
+line, discarding everything after it.
