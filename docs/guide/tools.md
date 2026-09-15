@@ -15,6 +15,25 @@ for. (You can also read the archive straight from a terminal — see
 - **Artifact** — something a turn produced and Taskrunner saved, such as the diff of
   file changes or the worker's raw activity log.
 
+## Draft a project post
+
+Ask your agent: “Use draft-webpost for what we worked on.” The skill writes a
+short, first-person post focused on completed project work, using earlier
+Taskrunner sessions when more context is needed. It checks existing coverage and
+continues matching drafts rather than duplicating them. Discovery also checks
+project-local writeups and, when an earlier draft is missing, archived sessions.
+Posts link to the project's public GitHub repository when one is available.
+
+Drafts are saved at `~/Projects/helloto/.webpost-drafts/<slug>/post.mdx`, with
+sources and feedback in a private `review.md` beside them. This is the canonical
+draft location for all projects; older drafts continued here retain their original
+path in the review note. Proposed revisions
+leave published articles intact until approved. Review the draft in conversation
+and ask for changes to its length, voice, or emphasis. Explicitly asking to publish
+the reviewed article (for example, “post it”) authorizes the skill to check, commit,
+and deploy it through the site's existing workflow, then verify the live URL.
+Private drafts and review notes stay out of the publishing commit.
+
 ## The tools
 
 ### `assign-task` — delegate new work

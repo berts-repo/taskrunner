@@ -87,6 +87,28 @@ only route out is through it.
   (any `allowDomains`) require agent-relayed user approval, recorded as an approval
   event.
 
+## Webpost drafting skill
+
+`draft-webpost` is a built-in skill registered in `src/skills.rs`, distributed
+through the same MCP and sync paths as the other built-in skills. It uses the
+current session, project files, and scoped archive queries to draft short portfolio
+posts for `~/Projects/helloto/`. Draft MDX and private review notes live under
+`.webpost-drafts/<slug>/`, the canonical draft location outside published content.
+Discovery includes hidden and ignored drafts, project-local writeups, and archive
+exchanges when a referenced draft cannot be found locally. Continued older drafts
+record their source path in the review note. It revises matching drafts,
+keeps proposed updates separate from published articles, and publishes only after
+an explicit user request for the reviewed article. Publishing checks the site's
+production branch and build, commits only approved content, uses the established
+deployment workflow, and records commit and live-URL verification in the private
+review note. Articles include a verified public GitHub repository link when
+available; the review note records the URL and visibility evidence or its omission.
+The skill checks the site's loader and article route for formatting; the current
+page supplies the H1, so draft bodies begin with prose. Review notes identify the
+intended post path and route without writing to published content.
+Editorial instructions belong in `skills/draft-webpost/SKILL.md`;
+generated harness copies are not the source.
+
 ## Conversation archive
 
 The sweeper periodically ingests transcripts into the event log as `message.recorded`

@@ -78,7 +78,14 @@ async fn declares_the_extension_and_serves_every_skill_with_matching_digests() {
     names.sort();
     assert_eq!(
         names,
-        ["archive-search", "delegate-task", "handoff", "setup-harness", "worker-login"]
+        [
+            "archive-search",
+            "delegate-task",
+            "draft-webpost",
+            "handoff",
+            "setup-harness",
+            "worker-login"
+        ]
     );
 
     let delegate = entry(&list, "delegate-task");
@@ -95,7 +102,7 @@ async fn declares_the_extension_and_serves_every_skill_with_matching_digests() {
     assert_eq!(delegate["digest"], digest, "the digest Claude Code's client checks");
 
     let listed = client.peer().list_all_resources().await.unwrap();
-    assert_eq!(listed.len(), 5);
+    assert_eq!(listed.len(), 6);
     let audited: Vec<String> = read_events(&paths.events_log)
         .unwrap()
         .into_iter()
