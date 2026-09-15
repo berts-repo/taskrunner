@@ -14,7 +14,11 @@ use crate::config::{Config, worker_config};
 use crate::domain::errors::{ErrorCode, ToolError};
 use crate::domain::policy::{RiskTier, resolve_tier};
 use crate::domain::projects::resolve_project;
-use crate::domain::tasks::{ArtifactHandle, TaskSnapshot, get_task_snapshot, get_turn_artifacts};
+use crate::domain::tasks::{
+    ArtifactHandle, INSPECTION_FAILED, TaskSnapshot, get_inspection_error, get_task_snapshot,
+    get_turn_artifacts,
+};
+use crate::harnesses::{default_image, worker_kind};
 use crate::ids::{IdPrefix, new_id};
 use crate::js;
 use crate::storage::Recorder;
@@ -24,7 +28,7 @@ use crate::storage::store::SharedStore;
 use crate::workers::harness::{TurnRequest, WorkerHarness};
 use crate::workers::runner::WorkerRunner;
 use crate::workspace::clone::WorkspaceProvider;
-use crate::workspace::git::{task_branch, uncommitted_files};
+use crate::workspace::git::{InspectWith, task_branch, uncommitted_files};
 
 /// Result contract shared by assign-task and continue-task.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +50,9 @@ pub struct TurnOutcome {
     /// Files uncommitted in the user's repository when the task was assigned.
     /// The worker's clone starts from the last commit, so it doesn't have them.
     pub uncommitted: Vec<String>,
+    /// Why the turn's workspace couldn't be read back, when it couldn't: its
+    /// diff and commits were then not captured.
+    pub inspection_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -485,6 +492,14 @@ impl Scheduler {
             })?;
         }
 
+        // The inspection gets what the worker had: its image, its limits.
+        let with = InspectWith {
+            image: worker_cfg.image.clone().or_else(|| {
+                worker_kind(&self.deps.config, &snapshot.worker)
+                    .map(|kind| default_image(kind).to_string())
+            }),
+            limits: worker_cfg.limits.clone(),
+        };
         let workspaces = self.deps.workspaces.clone();
         let (task, turn, dir, root) = (
             task_id.to_string(),
@@ -492,11 +507,22 @@ impl Scheduler {
             workspace_dir.clone(),
             PathBuf::from(project_root),
         );
-        let observed =
-            tokio::task::spawn_blocking(move || workspaces.after_turn(&task, &turn, &dir, &root))
-                .await
-                .map_err(|err| ToolError::new(ErrorCode::InternalError, err.to_string()))?;
-        let changed_files = merge_changed_files(result.changed_files, observed, &workspace_path);
+        let after = tokio::task::spawn_blocking(move || {
+            workspaces.after_turn(&task, &turn, &dir, &root, &with)
+        })
+        .await
+        .map_err(|err| ToolError::new(ErrorCode::InternalError, err.to_string()))?;
+        if let Some(error) = &after.inspection_error {
+            self.deps.store.record(EventBody::AuditRecorded {
+                session_id: None,
+                task_id: Some(task_id.into()),
+                turn_id: Some(entry.turn_id.clone()),
+                kind: INSPECTION_FAILED.into(),
+                payload: serde_json::json!({ "error": error }),
+            })?;
+        }
+        let changed_files =
+            merge_changed_files(result.changed_files, after.changed_files, &workspace_path);
 
         self.deps.store.record(EventBody::TurnCompleted {
             turn_id: entry.turn_id.clone(),
@@ -560,6 +586,10 @@ impl Scheduler {
             }),
             _ => None,
         });
+        let inspection_error = match &turn {
+            Some(turn) => get_inspection_error(&store.index, &turn.turn_id)?,
+            None => None,
+        };
         // Git runs outside the store lock.
         drop(store);
         let branch = task_branch(Path::new(&snapshot.project_root), task_id);
@@ -580,6 +610,7 @@ impl Scheduler {
             error,
             branch,
             uncommitted: vec![],
+            inspection_error,
         })
     }
 }

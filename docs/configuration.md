@@ -66,7 +66,7 @@ the change up when the daemon restarts (`taskrunner down`).
 
 - **Every worker has resource limits.** The `[worker.<name>.limits]` ceilings
   (memory 4g, cpus 2, pids 512 by default) apply to built-in and custom workers
-  alike. They bound a runaway turn — Docker stops the container at the limit
+  alike, and to the container that reads a finished turn's work back. They bound a runaway turn — Docker stops the container at the limit
   instead of your machine grinding to a halt. Raise them for heavy builds, lower
   them for tighter isolation.
 - **Typos fail loudly.** Unknown keys are rejected, not ignored — so a misspelled

@@ -48,7 +48,8 @@ The worker never touches your actual project directory.
   git to run — and the turn could have written them. So that inspection runs in its
   own throwaway container, with no network and nothing of your machine but the clone.
   Anything planted fires in there and dies with it; your machine only reads the plain
-  files it produced.
+  files it produced. It runs under the same memory, CPU and process limits as the
+  worker, and one that outlasts its two-minute limit is removed, not left running.
 - **Results come back for review.** Work the task commits is fetched into your
   repository from a bundle — a single file of git objects rather than a repository, so
   git reads it as data, with its integrity checks switched on. It lands on a branch

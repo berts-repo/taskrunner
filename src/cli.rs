@@ -88,6 +88,18 @@ impl Args {
     }
 }
 
+/// Writes command output to stdout. A reader that stops early (`| head`)
+/// closes the pipe: that is its choice, not our failure, and `print!` would
+/// panic on it — so exactly that error is ignored and the command keeps its
+/// exit code.
+pub fn say(text: &str) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    match stdout.write_all(text.as_bytes()).and_then(|()| stdout.flush()) {
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
 /// Fetches a read-only query route from the daemon over the control socket
 /// and prints the plain-text body. Mirrors `status`: a down daemon is a soft
 /// failure.
@@ -112,18 +124,11 @@ async fn read_query(
         Ok(res) => {
             let body =
                 if res.body.ends_with('\n') { res.body.clone() } else { format!("{}\n", res.body) };
-            // A reader that stops early (`| head`) closes the pipe. That is its
-            // choice, not our failure — and `print!` would panic on it — so the
-            // write ignores exactly that error and the query keeps its exit code.
-            let mut stdout = io::stdout().lock();
-            match stdout.write_all(body.as_bytes()).and_then(|()| stdout.flush()) {
-                Err(err) if err.kind() != io::ErrorKind::BrokenPipe => return Err(err.into()),
-                _ => {}
-            }
+            say(&body)?;
             Ok(if res.ok() { 0 } else { 1 })
         }
         Err(_) => {
-            println!("taskrunner daemon is not running");
+            say("taskrunner daemon is not running\n")?;
             Ok(1)
         }
     }
@@ -270,10 +275,9 @@ pub async fn main(argv: &[String]) -> i32 {
             )
             .await
         }
-        None | Some("help" | "--help" | "-h") => {
-            print!("{USAGE}");
-            Ok(if args.command.is_none() { 1 } else { 0 })
-        }
+        None | Some("help" | "--help" | "-h") => say(USAGE)
+            .map(|()| if args.command.is_none() { 1 } else { 0 })
+            .map_err(anyhow::Error::from),
         Some(other) => {
             eprint!("taskrunner: unknown command '{other}'\n\n{USAGE}");
             Ok(1)
@@ -297,7 +301,7 @@ async fn up(paths: &StatePaths) -> anyhow::Result<i32> {
         }
         Err(err) => return Err(err),
     };
-    println!("taskrunner daemon {VERSION} listening on {}", paths.socket_path.display());
+    say(&format!("taskrunner daemon {VERSION} listening on {}\n", paths.socket_path.display()))?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
@@ -313,17 +317,17 @@ async fn down(paths: &StatePaths) -> anyhow::Result<i32> {
     use nix::unistd::Pid;
 
     let Some(pid) = crate::daemon::read_pid(&paths.pid_file) else {
-        println!("taskrunner daemon is not running");
+        say("taskrunner daemon is not running\n")?;
         return Ok(0);
     };
     if kill(Pid::from_raw(pid), Signal::SIGTERM).is_err() {
-        println!("taskrunner daemon is not running (stale pid file)");
+        say("taskrunner daemon is not running (stale pid file)\n")?;
         return Ok(0);
     }
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if !crate::daemon::is_process_alive(pid) {
-            println!("taskrunner daemon stopped (pid {pid})");
+            say(&format!("taskrunner daemon stopped (pid {pid})\n"))?;
             return Ok(0);
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -338,7 +342,7 @@ async fn status(paths: &StatePaths) -> anyhow::Result<i32> {
         match fetched.ok().filter(|r| r.ok()).and_then(|r| serde_json::from_str(&r.body).ok()) {
             Some(body) => body,
             None => {
-                println!("taskrunner daemon is not running");
+                say("taskrunner daemon is not running\n")?;
                 return Ok(1);
             }
         };
@@ -348,13 +352,13 @@ async fn status(paths: &StatePaths) -> anyhow::Result<i32> {
             counts.iter().map(|(status, n)| format!("{status}={n}")).collect::<Vec<_>>().join(" ")
         })
         .unwrap_or_default();
-    println!(
-        "taskrunner daemon {} running (pid {})",
+    say(&format!(
+        "taskrunner daemon {} running (pid {})\nstate root: {}\nactive mcp sessions: {}\ntasks: {}\n",
         body["version"].as_str().unwrap_or(""),
-        body["pid"]
-    );
-    println!("state root: {}", body["state_root"].as_str().unwrap_or(""));
-    println!("active mcp sessions: {}", body["active_mcp_sessions"]);
-    println!("tasks: {}", if tasks.is_empty() { "none".to_string() } else { tasks });
+        body["pid"],
+        body["state_root"].as_str().unwrap_or(""),
+        body["active_mcp_sessions"],
+        if tasks.is_empty() { "none".to_string() } else { tasks }
+    ))?;
     Ok(0)
 }

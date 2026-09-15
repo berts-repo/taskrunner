@@ -10,7 +10,7 @@ use taskrunner::storage::Recorder;
 use taskrunner::storage::artifacts::ArtifactStore;
 use taskrunner::storage::events::{EventBody, LogEvent};
 use taskrunner::workspace::clone::{CloneWorkspaces, WorkspaceProvider};
-use taskrunner::workspace::git::{ContainerGit, HostGit, WorkspaceGit};
+use taskrunner::workspace::git::{ContainerGit, HostGit, InspectWith, WorkspaceGit};
 
 use crate::helpers::init_git_repo;
 
@@ -86,7 +86,10 @@ fn reports_edited_and_created_files_and_captures_a_diff_artifact() {
     // part of what the turn did.
     std::fs::write(dir.join("created.txt"), "brand new\n").unwrap();
 
-    let changed = p.workspaces.after_turn("task_c3", "turn_c3", &dir, repo.path());
+    let changed = p
+        .workspaces
+        .after_turn("task_c3", "turn_c3", &dir, repo.path(), &InspectWith::default())
+        .changed_files;
     assert_eq!(changed, vec!["README.md", "created.txt"]);
 
     let recorded = p.recorded.0.lock().unwrap();
@@ -109,13 +112,13 @@ fn lands_committed_work_on_the_host_repo_under_the_task_branch() {
     git_in(&dir, &["commit", "-qm", "worker commit"]);
     let tip = git_in(&dir, &["rev-parse", "HEAD"]);
 
-    p.workspaces.after_turn("task_c4", "turn_c4", &dir, repo.path());
+    p.workspaces.after_turn("task_c4", "turn_c4", &dir, repo.path(), &InspectWith::default());
     assert_eq!(git_in(repo.path(), &["rev-parse", "taskrunner/task_c4"]), tip);
     // The host branch is a real local branch; the working tree is untouched.
     assert!(!repo.path().join("new.txt").exists());
 
     // Re-running after_turn without new commits is a no-op.
-    p.workspaces.after_turn("task_c4", "turn_c4b", &dir, repo.path());
+    p.workspaces.after_turn("task_c4", "turn_c4b", &dir, repo.path(), &InspectWith::default());
     assert_eq!(git_in(repo.path(), &["rev-parse", "taskrunner/task_c4"]), tip);
 }
 
@@ -124,7 +127,7 @@ fn leaves_no_inspection_directory_behind() {
     let repo = init_git_repo();
     let p = make_provider();
     let dir = p.workspaces.ensure_workspace("task_c6", repo.path()).unwrap();
-    p.workspaces.after_turn("task_c6", "turn_c6", &dir, repo.path());
+    p.workspaces.after_turn("task_c6", "turn_c6", &dir, repo.path(), &InspectWith::default());
 
     let leftovers: Vec<_> = std::fs::read_dir(p.root.path().join("workspaces"))
         .unwrap()
@@ -158,7 +161,10 @@ fn never_runs_commands_planted_in_the_clones_git_config_on_the_host() {
     git_in(&dir, &["config", "core.fsmonitor", &plant]);
     std::fs::write(dir.join("README.md"), "changed\n").unwrap();
 
-    let changed = p.workspaces.after_turn("task_c5", "turn_c5", &dir, repo.path());
+    let changed = p
+        .workspaces
+        .after_turn("task_c5", "turn_c5", &dir, repo.path(), &InspectWith::default())
+        .changed_files;
 
     assert!(!marker.exists(), "a command planted in the clone's git config ran on the host");
     // And the inspection still did its job inside the container.

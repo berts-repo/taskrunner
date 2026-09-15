@@ -15,15 +15,22 @@
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::config::HarnessKind;
+use crate::config::{HarnessKind, ResourceLimits};
 use crate::harnesses::default_image;
-use crate::process::run;
+use crate::process::{remove_labelled_containers, run};
+use crate::workers::runner::resource_limit_args;
 
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(120);
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Marks inspection containers so a later daemon can reap the ones a crash
+/// left behind, without ever touching a worker container.
+pub const INSPECT_LABEL: &str = "taskrunner.role=workspace-inspect";
+
+/// What [`INSPECT_SCRIPT`] says on stderr when the image it runs in has no git.
+const NO_GIT: &str = "taskrunner-inspect: no git";
 
 pub struct GitOutput {
     pub ok: bool,
@@ -79,6 +86,7 @@ pub const INSPECT_SCRIPT: &str = r#"
 set -u
 ws=$1; out=$2; base=$3; branch=$4
 cd "$ws" || exit 1
+command -v git >/dev/null 2>&1 || { echo "taskrunner-inspect: no git" >&2; exit 3; }
 # safe.directory: the clone is owned by the host user, and this may run as
 # another; it is command-line config, which a repository's own config cannot
 # override.
@@ -95,76 +103,106 @@ fi
 exit 0
 "#;
 
+/// What an inspection runs with, taken from the worker whose turn it reads.
+#[derive(Debug, Clone, Default)]
+pub struct InspectWith {
+    /// The worker's own image, tried before the built-in ones.
+    pub image: Option<String>,
+    /// The worker's ceilings. Whatever the turn planted in its clone runs
+    /// during the inspection, so it gets no more room than the turn had.
+    pub limits: ResourceLimits,
+}
+
 /// Reads a worker's workspace without letting its `.git` reach the host.
 pub trait WorkspaceGit: Send + Sync {
     /// Runs [`INSPECT_SCRIPT`] over `workspace_dir`, leaving its output files
-    /// in `out_dir`. Errors are reported for logging only — the host treats a
-    /// missing output file as "nothing to report" either way.
+    /// in `out_dir`. `turn_id` names the run. An error means nothing could be
+    /// read back, so the turn's diff and commits were not captured.
     fn inspect(
         &self,
         workspace_dir: &Path,
         out_dir: &Path,
         base: &str,
         branch: &str,
+        turn_id: &str,
+        with: &InspectWith,
     ) -> Result<(), String>;
 }
 
 /// Production: the inspection runs in a throwaway container over the mounted
 /// clone. Anything the clone's config makes git execute runs in there — with
-/// no network, no credentials, and nothing of the host but the clone and the
-/// output directory — and dies with the container.
+/// no network, no credentials, nothing of the host but the clone and the
+/// output directory, and the worker's resource limits — and dies with the
+/// container.
 pub struct ContainerGit {
     docker: String,
-    image: Mutex<Option<String>>,
+    timeout: Duration,
 }
 
 impl ContainerGit {
     pub fn new(docker: &str) -> ContainerGit {
-        ContainerGit { docker: docker.to_string(), image: Mutex::new(None) }
+        ContainerGit { docker: docker.to_string(), timeout: INSPECT_TIMEOUT }
     }
 
-    /// Any built worker image will do — they all ship git — so this needs no
-    /// configuration of its own and works whichever workers exist. Resolved
-    /// once per daemon.
-    fn image(&self) -> Option<String> {
-        let mut cached = self.image.lock().unwrap_or_else(|p| p.into_inner());
-        if cached.is_none() {
-            for candidate in [default_image(HarnessKind::Codex), default_image(HarnessKind::Claude)]
-            {
-                if run(&self.docker, &["image", "inspect", candidate], DOCKER_TIMEOUT).ok {
-                    *cached = Some(candidate.to_string());
-                    break;
-                }
+    /// Test seam: a shorter limit than a real inspection gets.
+    pub fn with_timeout(mut self, timeout: Duration) -> ContainerGit {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn container_name(turn_id: &str) -> String {
+        format!("taskrunner-inspect-{turn_id}")
+    }
+
+    /// The images to try, in order: the worker's own, then the built-in ones
+    /// (a custom image may not ship git). Only images that are built.
+    fn images(&self, with: &InspectWith) -> Vec<String> {
+        let mut images: Vec<String> = with.image.iter().cloned().collect();
+        for kind in [HarnessKind::Codex, HarnessKind::Claude] {
+            let builtin = default_image(kind).to_string();
+            if !images.contains(&builtin) {
+                images.push(builtin);
             }
         }
-        cached.clone()
+        images
+            .into_iter()
+            .filter(|image| run(&self.docker, &["image", "inspect", image], DOCKER_TIMEOUT).ok)
+            .collect()
     }
 
     /// The container arguments, separated out so a test can assert the
     /// isolation without needing Docker.
-    pub fn docker_args(workspace_dir: &Path, out_dir: &Path, image: &str) -> Vec<String> {
-        [
-            "run",
-            "--rm",
-            "--network",
-            "none",
-            "--security-opt",
-            "no-new-privileges",
-            "-v",
-            &format!("{}:/workspace", workspace_dir.display()),
-            "-v",
-            &format!("{}:/out", out_dir.display()),
-            "-w",
-            "/workspace",
-            "-e",
-            "HOME=/tmp",
-            "--entrypoint",
-            "sh",
-            image,
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    pub fn docker_args(
+        workspace_dir: &Path,
+        out_dir: &Path,
+        image: &str,
+        name: &str,
+        limits: &ResourceLimits,
+    ) -> Vec<String> {
+        let mut args: Vec<String> = ["run", "--rm", "--name", name, "--label", INSPECT_LABEL]
+            .iter()
+            .chain(&["--network", "none"])
+            .map(|s| s.to_string())
+            .collect();
+        args.extend(resource_limit_args(limits));
+        args.extend(
+            [
+                "-v",
+                &format!("{}:/workspace", workspace_dir.display()),
+                "-v",
+                &format!("{}:/out", out_dir.display()),
+                "-w",
+                "/workspace",
+                "-e",
+                "HOME=/tmp",
+                "--entrypoint",
+                "sh",
+                image,
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+        args
     }
 }
 
@@ -175,20 +213,46 @@ impl WorkspaceGit for ContainerGit {
         out_dir: &Path,
         base: &str,
         branch: &str,
+        turn_id: &str,
+        with: &InspectWith,
     ) -> Result<(), String> {
-        let image = self.image().ok_or_else(|| {
-            "no worker image is built, so the workspace cannot be inspected safely".to_string()
-        })?;
-        let mut args = ContainerGit::docker_args(workspace_dir, out_dir, &image);
-        args.extend(
-            ["-c", INSPECT_SCRIPT, "sh", "/workspace", "/out", base, branch]
-                .iter()
-                .map(|s| s.to_string()),
-        );
-        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-        let output = run(&self.docker, &argv, INSPECT_TIMEOUT);
-        if output.ok { Ok(()) } else { Err(output.stderr.trim().to_string()) }
+        let images = self.images(with);
+        if images.is_empty() {
+            return Err(
+                "no worker image is built, so the workspace cannot be inspected safely".to_string()
+            );
+        }
+        let name = ContainerGit::container_name(turn_id);
+        let mut without_git = vec![];
+        for image in &images {
+            let mut args =
+                ContainerGit::docker_args(workspace_dir, out_dir, image, &name, &with.limits);
+            args.extend(
+                ["-c", INSPECT_SCRIPT, "sh", "/workspace", "/out", base, branch]
+                    .iter()
+                    .map(|s| s.to_string()),
+            );
+            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = run(&self.docker, &argv, self.timeout);
+            if output.ok {
+                return Ok(());
+            }
+            // Killing a timed-out `docker run` leaves its container running,
+            // so it goes by name. Harmless when `--rm` already removed it.
+            run(&self.docker, &["rm", "-f", &name], DOCKER_TIMEOUT);
+            if !output.stderr.contains(NO_GIT) {
+                return Err(output.stderr.trim().to_string());
+            }
+            without_git.push(image.as_str());
+        }
+        Err(format!("no built image has git ({})", without_git.join(", ")))
     }
+}
+
+/// Removes inspection containers left behind by a daemon that was killed
+/// mid-inspection. Called at startup, before any turn can have finished.
+pub fn reap_inspection_containers(docker: &str) -> anyhow::Result<usize> {
+    remove_labelled_containers(docker, INSPECT_LABEL, "inspection", DOCKER_TIMEOUT)
 }
 
 /// Runs the same script directly on the host. For tests over repositories the
@@ -203,6 +267,8 @@ impl WorkspaceGit for HostGit {
         out_dir: &Path,
         base: &str,
         branch: &str,
+        _turn_id: &str,
+        _with: &InspectWith,
     ) -> Result<(), String> {
         let output = run(
             "sh",
@@ -315,6 +381,8 @@ mod tests {
             Path::new("/state/workspaces/task_1"),
             Path::new("/state/workspaces/.inspect-turn_1"),
             "taskrunner/codex-worker",
+            "taskrunner-inspect-turn_1",
+            &ResourceLimits::default(),
         );
         assert!(args.windows(2).any(|w| w == ["--network", "none"]));
         assert!(args.contains(&"/state/workspaces/task_1:/workspace".to_string()));
@@ -322,5 +390,67 @@ mod tests {
         // Nothing else of the host, and no worker credentials.
         assert_eq!(args.iter().filter(|arg| *arg == "-v").count(), 2);
         assert!(!args.iter().any(|arg| arg.contains("--mount")));
+        // The worker's ceilings, and a name and label to find it by.
+        assert!(args.windows(2).any(|w| w == ["--memory", "4g"]));
+        assert!(args.windows(2).any(|w| w == ["--pids-limit", "512"]));
+        assert!(args.windows(2).any(|w| w == ["--security-opt", "no-new-privileges"]));
+        assert!(args.windows(2).any(|w| w == ["--name", "taskrunner-inspect-turn_1"]));
+        assert!(args.windows(2).any(|w| w == ["--label", INSPECT_LABEL]));
+    }
+
+    /// A stand-in `docker` that logs every call beside itself and runs `body`
+    /// for `docker run`.
+    fn fake_docker(dir: &Path, run_body: &str) -> (String, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("docker");
+        let log = dir.join("calls");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1\" in\n  run) {run_body} ;;\n  ps) echo stale1 ;;\nesac\nexit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        (script.display().to_string(), log)
+    }
+
+    #[test]
+    fn a_timed_out_inspection_removes_its_container_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (docker, log) = fake_docker(dir.path(), "exec sleep 5");
+        let git = ContainerGit::new(&docker).with_timeout(Duration::from_millis(300));
+        let err = git
+            .inspect(dir.path(), dir.path(), "", "b", "turn_t", &InspectWith::default())
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        let calls = fs::read_to_string(log).unwrap();
+        assert!(calls.contains("rm -f taskrunner-inspect-turn_t"), "{calls}");
+    }
+
+    #[test]
+    fn falls_back_to_a_built_in_image_when_the_workers_has_no_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "case \"$*\" in *' custom/image -c'*) echo 'taskrunner-inspect: no git' >&2; exit 3 ;; esac";
+        let (docker, log) = fake_docker(dir.path(), body);
+        let with = InspectWith { image: Some("custom/image".into()), ..Default::default() };
+        ContainerGit::new(&docker)
+            .inspect(dir.path(), dir.path(), "", "b", "turn_f", &with)
+            .unwrap();
+        let calls = fs::read_to_string(log).unwrap();
+        let custom = calls.find("sh custom/image -c").expect("tried the worker's image");
+        let builtin = calls.find("sh taskrunner/codex-worker -c").expect("fell back to a built-in");
+        assert!(custom < builtin);
+    }
+
+    #[test]
+    fn reaps_only_containers_carrying_the_inspection_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let (docker, log) = fake_docker(dir.path(), "exit 0");
+        assert_eq!(reap_inspection_containers(&docker).unwrap(), 1);
+        let calls = fs::read_to_string(log).unwrap();
+        assert!(calls.contains(&format!("ps -aq --filter label={INSPECT_LABEL}")), "{calls}");
+        assert!(calls.contains("rm -f stale1"), "{calls}");
     }
 }

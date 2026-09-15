@@ -211,7 +211,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use taskrunner::workers::harness::{TurnRequest, TurnResult, WorkerEvent, WorkerHarness};
-use taskrunner::workspace::clone::WorkspaceProvider;
+use taskrunner::workspace::clone::{AfterTurn, WorkspaceProvider};
+use taskrunner::workspace::git::InspectWith;
 
 /// Runs workers directly in the project root: no clone, no isolation.
 pub struct ProjectRootWorkspaces;
@@ -226,8 +227,31 @@ impl WorkspaceProvider for ProjectRootWorkspaces {
         _turn_id: &str,
         _workspace_dir: &Path,
         _project_root: &Path,
-    ) -> Vec<String> {
-        vec![]
+        _with: &InspectWith,
+    ) -> AfterTurn {
+        AfterTurn::default()
+    }
+}
+
+/// Like [`ProjectRootWorkspaces`], but reading the workspace back always fails.
+pub struct UnreadableWorkspaces;
+
+impl WorkspaceProvider for UnreadableWorkspaces {
+    fn ensure_workspace(&self, _task_id: &str, project_root: &Path) -> Result<PathBuf, ToolError> {
+        Ok(project_root.to_path_buf())
+    }
+    fn after_turn(
+        &self,
+        _task_id: &str,
+        _turn_id: &str,
+        _workspace_dir: &Path,
+        _project_root: &Path,
+        _with: &InspectWith,
+    ) -> AfterTurn {
+        AfterTurn {
+            changed_files: vec![],
+            inspection_error: Some("no built image has git (custom/image)".into()),
+        }
     }
 }
 

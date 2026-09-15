@@ -27,6 +27,8 @@ more network access than the worker's default, that's requested here too (see
 
 The worker's copy starts from your **last commit**. If you have uncommitted changes, the
 result lists them under **not included**, so your agent can ask whether to commit first.
+If Taskrunner can't read the worker's copy back afterwards, the result and the task's
+summary carry a **warning**: that turn's diff and commits weren't captured.
 
 ### `lookup-task` — see what happened
 

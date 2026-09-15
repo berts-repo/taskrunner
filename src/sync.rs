@@ -24,6 +24,7 @@ use std::process::{Command, Stdio};
 use anyhow::Context;
 use serde_json::Value;
 
+use crate::cli::say;
 use crate::config::{Config, Delegation, HostConfig, HostKind, load_config};
 use crate::paths::{StatePaths, default_root};
 use crate::skills::{self, Skill};
@@ -501,8 +502,7 @@ fn ask(question: &str) -> Option<String> {
     if !std::io::stdin().is_terminal() {
         return None;
     }
-    print!("{question}");
-    std::io::stdout().flush().ok()?;
+    say(question).ok()?;
     let mut answer = String::new();
     std::io::stdin().lock().read_line(&mut answer).ok()?;
     Some(answer.trim().to_lowercase())
@@ -515,7 +515,7 @@ fn ask_until<T>(question: &str, hint: &str, read: impl Fn(&str) -> Option<T>) ->
         if let Some(value) = read(&ask(question)?) {
             return Some(value);
         }
-        println!("  Please answer {hint}.");
+        let _ = say(&format!("  Please answer {hint}.\n"));
     }
 }
 
@@ -734,10 +734,10 @@ pub fn run_sync(paths: &StatePaths, options: &SyncOptions) -> anyhow::Result<i32
         }
     }
     for line in &report.lines {
-        println!("{line}");
+        say(&format!("{line}\n"))?;
     }
     if !report.changed {
-        println!("taskrunner sync: nothing to change");
+        say("taskrunner sync: nothing to change\n")?;
     }
     Ok(0)
 }

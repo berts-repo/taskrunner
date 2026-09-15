@@ -11,6 +11,13 @@ fn artifact_line(a: &ArtifactHandle) -> String {
     )
 }
 
+/// Shown wherever a turn's result is, when its workspace couldn't be read back.
+pub fn inspection_warning(error: &str) -> String {
+    format!(
+        "warning: the worker's workspace could not be read back, so this turn's diff and commits were not captured ({error})"
+    )
+}
+
 pub fn render_outcome(outcome: &TurnOutcome) -> String {
     let mut lines = vec![
         format!("task: {}", outcome.task_id),
@@ -41,6 +48,10 @@ pub fn render_outcome(outcome: &TurnOutcome) -> String {
         if outcome.uncommitted.len() > 10 {
             lines.push(format!("  … and {} more", outcome.uncommitted.len() - 10));
         }
+    }
+    if let Some(error) = &outcome.inspection_error {
+        lines.push(String::new());
+        lines.push(inspection_warning(error));
     }
     if let Some(summary) = outcome.summary.as_deref().filter(|s| !s.is_empty()) {
         lines.push(String::new());

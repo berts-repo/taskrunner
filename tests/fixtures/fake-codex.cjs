@@ -19,6 +19,17 @@ if (prompt.includes("exit-nonzero")) {
 emit({ type: "thread.started", thread_id: threadId });
 emit({ type: "turn.started" });
 
+if (prompt.includes("exit-leaving-stderr-open")) {
+  // Exits, but a child it started keeps stderr open, so reading stderr to its
+  // end would wait on the child instead of the worker.
+  require("node:child_process")
+    .spawn("sleep", ["30"], { stdio: ["ignore", "ignore", "inherit"], detached: true })
+    .unref();
+  emit({ type: "item.completed", item: { item_type: "agent_message", text: "done" } });
+  emit({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } });
+  process.exit(0);
+}
+
 if (prompt.includes("close-stdout-and-hang")) {
   // Stops writing but keeps running: reading its output ends on its own,
   // which is where cancellation used to stop being watched. Closing fd 1 is

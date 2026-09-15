@@ -353,3 +353,25 @@ async fn auto_starts_one_daemon_even_when_two_shims_race_and_both_connect() {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGTERM)
         .unwrap();
 }
+
+#[test]
+fn status_down_and_help_exit_cleanly_when_their_reader_closes_the_pipe() {
+    let (_dir, paths) = short_root();
+    // No daemon is running: each prints a line and exits with its usual code.
+    for (command, code) in [("status", 1), ("down", 0), ("help", 0)] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let out = std::process::Command::new(taskrunner_bin())
+            .args([command, "--state-root"])
+            .arg(&paths.root)
+            .stdout(writer)
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(code), "{command}: {stderr}");
+        assert!(stderr.is_empty(), "{command}: {stderr}");
+    }
+}

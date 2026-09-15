@@ -106,7 +106,7 @@ use crate::storage::store::SharedStore;
 use crate::workers::harness::WorkerHarness;
 use crate::workers::runner::{DockerRunner, DockerRunnerOptions, WorkerRunner};
 use crate::workspace::clone::{CloneWorkspaces, WorkspaceProvider};
-use crate::workspace::git::ContainerGit;
+use crate::workspace::git::{ContainerGit, reap_inspection_containers};
 use scheduler::{MakeRunner, RunnerContext, Scheduler, SchedulerDeps};
 use std::collections::HashMap;
 
@@ -236,12 +236,18 @@ impl Daemon {
 
         // Before the first sweep, and only here: a copy-out container that is
         // still around is garbage by definition at this point, but one created
-        // by a sweep in flight would not be. Never fatal — a stray container
-        // costs nothing, so failing to clear it must not keep the daemon down.
+        // by a sweep in flight would not be. Likewise an inspection container:
+        // no turn can have finished yet. Never fatal — failing to clear a
+        // stray container must not keep the daemon down.
         if let Ok(Err(err)) =
             tokio::task::spawn_blocking(|| reap_copy_out_containers("docker")).await
         {
             eprintln!("taskrunner: copy-out container reap failed: {err}");
+        }
+        if let Ok(Err(err)) =
+            tokio::task::spawn_blocking(|| reap_inspection_containers("docker")).await
+        {
+            eprintln!("taskrunner: inspection container reap failed: {err}");
         }
         // Only once the sockets are accepting: the first backfill can run for
         // minutes, and shims give the daemon a bounded window to become ready.

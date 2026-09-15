@@ -50,12 +50,18 @@ pub trait WorkerHarness: Send + Sync {
 /// Shared by both harnesses: they differ only in what they make of each line.
 pub(crate) mod drive {
     use std::process::ExitStatus;
+    use std::time::Duration;
 
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     use tokio_util::sync::CancellationToken;
 
     use super::super::runner::RunningWorker;
     use crate::domain::errors::{ErrorCode, ToolError};
+
+    /// How long to wait for a worker's stderr to close once it has exited.
+    /// Something the worker started can keep the pipe open indefinitely, and
+    /// that must not hold the turn: nothing watches cancel by then.
+    const STDERR_GRACE: Duration = Duration::from_secs(2);
 
     /// How a worker run ended.
     pub struct Exit {
@@ -73,7 +79,7 @@ pub(crate) mod drive {
     ) -> Exit {
         let stdout = worker.child.stdout.take();
         let stderr = worker.child.stderr.take();
-        let stderr_tail = tokio::spawn(async move {
+        let mut stderr_tail = tokio::spawn(async move {
             let mut text = String::new();
             if let Some(mut stderr) = stderr {
                 let _ = stderr.read_to_string(&mut text).await;
@@ -115,9 +121,16 @@ pub(crate) mod drive {
                 }
             }
         };
+        let stderr_tail = match tokio::time::timeout(STDERR_GRACE, &mut stderr_tail).await {
+            Ok(tail) => tail.unwrap_or_default(),
+            Err(_) => {
+                stderr_tail.abort();
+                String::new()
+            }
+        };
         Exit {
             code: status.and_then(|s| s.code()),
-            stderr_tail: stderr_tail.await.unwrap_or_default(),
+            stderr_tail,
             aborted: aborted || cancel.is_cancelled(),
         }
     }

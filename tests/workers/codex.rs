@@ -146,6 +146,27 @@ async fn cancels_a_worker_that_closed_its_output_and_kept_running() {
     assert!(err.message.contains("terminated by abort"), "{}", err.message);
 }
 
+#[tokio::test]
+async fn a_worker_that_exits_but_leaves_stderr_open_still_ends_its_turn() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (_, on_event) = collect();
+    // The worker exits at once; a child it started holds stderr for 30 s.
+    let codex = harness();
+    let runner = fake_runner(workspace.path());
+    let turn = codex.run_turn(TurnRequest {
+        runner: &runner,
+        prompt: "exit-leaving-stderr-open".into(),
+        native_session_id: None,
+        cancel: CancellationToken::new(),
+        on_event: &on_event,
+    });
+    let result = tokio::time::timeout(Duration::from_secs(10), turn)
+        .await
+        .expect("the turn waited on a pipe the worker no longer held")
+        .unwrap();
+    assert!(result.response.contains("done"), "{}", result.response);
+}
+
 /// A runner that records the spec and runs nothing (well, `true`).
 struct CapturingRunner {
     captured: Mutex<Vec<WorkerSpawnSpec>>,

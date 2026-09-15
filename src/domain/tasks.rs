@@ -185,6 +185,17 @@ pub struct AuditRow {
     pub payload: Value,
 }
 
+/// The audit kind recorded when a turn's workspace couldn't be read back.
+pub const INSPECTION_FAILED: &str = "workspace.inspection-failed";
+
+/// Why a turn's workspace couldn't be read back, if it couldn't.
+pub fn get_inspection_error(index: &StateIndex, turn_id: &str) -> rusqlite::Result<Option<String>> {
+    Ok(get_turn_audit(index, turn_id)?
+        .into_iter()
+        .find(|row| row.kind == INSPECTION_FAILED)
+        .map(|row| row.payload["error"].as_str().unwrap_or_default().to_string()))
+}
+
 pub fn get_turn_audit(index: &StateIndex, turn_id: &str) -> rusqlite::Result<Vec<AuditRow>> {
     let mut stmt = index
         .db

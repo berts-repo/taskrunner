@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 
-use crate::process::{Output, run as run_with_timeout};
+use crate::process::{Output, remove_labelled_containers, run as run_with_timeout};
 
 /// Marks the throwaway mount containers so a later daemon can recognize and
 /// reap the ones an earlier one left behind. Filtering on this label is what
@@ -71,20 +71,7 @@ pub fn docker_copy_out(
 /// same label, and pulling it out from under an in-flight `docker cp` would
 /// fail the sweep it belongs to.
 pub fn reap_copy_out_containers(docker: &str) -> anyhow::Result<usize> {
-    let listed = run(docker, &["ps", "-aq", "--filter", &format!("label={COPY_OUT_LABEL}")]);
-    if !listed.ok {
-        bail!("docker ps failed while reaping copy-out containers: {}", listed.stderr.trim());
-    }
-    let listed = listed.text();
-    let ids: Vec<&str> = listed.lines().map(str::trim).filter(|id| !id.is_empty()).collect();
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    let removed = run(docker, &[&["rm", "-f"][..], &ids[..]].concat());
-    if !removed.ok {
-        bail!("docker rm failed while reaping copy-out containers: {}", removed.stderr.trim());
-    }
-    Ok(ids.len())
+    remove_labelled_containers(docker, COPY_OUT_LABEL, "copy-out", DOCKER_TIMEOUT)
 }
 
 /// Every docker call here is bounded: a wedged daemon must not wedge a sweep.

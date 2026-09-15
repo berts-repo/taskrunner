@@ -15,7 +15,9 @@ use taskrunner::paths::StatePaths;
 use taskrunner::storage::events::{EventBody, LogEvent, read_events};
 use taskrunner::workers::harness::WorkerHarness;
 
-use crate::helpers::{FakeHarness, ProjectRootWorkspaces};
+use taskrunner::workspace::clone::WorkspaceProvider;
+
+use crate::helpers::{FakeHarness, ProjectRootWorkspaces, UnreadableWorkspaces};
 use crate::short_root;
 
 struct Stack {
@@ -27,6 +29,10 @@ struct Stack {
 }
 
 async fn stack() -> Stack {
+    stack_with(Arc::new(ProjectRootWorkspaces)).await
+}
+
+async fn stack_with(workspaces: Arc<dyn WorkspaceProvider>) -> Stack {
     let (dir, paths) = short_root();
     let mut harnesses: HashMap<String, Arc<dyn WorkerHarness>> = HashMap::new();
     harnesses.insert("fake".into(), Arc::new(FakeHarness::default()));
@@ -35,7 +41,7 @@ async fn stack() -> Stack {
         DaemonOptions {
             ingest_sources: Some(vec![]),
             harnesses: Some(harnesses),
-            workspaces: Some(Arc::new(ProjectRootWorkspaces)),
+            workspaces: Some(workspaces),
             make_runner: None,
         },
     )
@@ -289,5 +295,23 @@ async fn assign_task_names_uncommitted_files_and_lookup_task_names_the_landed_br
     assert!(created.success());
     let lookup = text(&st.call("lookup-task", json!({ "taskId": task_id })).await);
     assert!(lookup.contains(&format!("branch: {branch}")), "{lookup}");
+    st.close().await;
+}
+
+#[tokio::test]
+async fn a_turn_whose_workspace_could_not_be_read_back_says_so() {
+    let st = stack_with(Arc::new(UnreadableWorkspaces)).await;
+    let project = st.project.path().to_string_lossy().into_owned();
+    let assign = text(
+        &st.call(
+            "assign-task",
+            json!({ "project": project, "worker": "fake", "prompt": "make it so", "wait": true }),
+        )
+        .await,
+    );
+    let warning = "warning: the worker's workspace could not be read back";
+    assert!(assign.contains(warning) && assign.contains("custom/image"), "{assign}");
+    let lookup = text(&st.call("lookup-task", json!({ "taskId": task_id_in(&assign) })).await);
+    assert!(lookup.contains(warning), "{lookup}");
     st.close().await;
 }

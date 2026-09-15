@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::cli::say;
 use crate::client;
 use crate::config::{Config, HarnessKind, HostKind, load_config, worker_config};
 use crate::daemon::mcp::VERSION;
@@ -356,13 +357,13 @@ pub async fn run_doctor(paths: &StatePaths) -> anyhow::Result<i32> {
     check_ingest(&config, paths, &mut checks);
 
     for c in &checks {
-        println!("  {} {}: {}", c.level.mark(), c.label, c.detail);
+        say(&format!("  {} {}: {}\n", c.level.mark(), c.label, c.detail))?;
     }
     let failures = checks.iter().filter(|c| c.level == Level::Fail).count();
     let warnings = checks.iter().filter(|c| c.level == Level::Warn).count();
-    println!(
-        "\ntaskrunner doctor: {failures} failing, {warnings} warning(s), {} ok",
+    say(&format!(
+        "\ntaskrunner doctor: {failures} failing, {warnings} warning(s), {} ok\n",
         checks.len() - failures - warnings
-    );
+    ))?;
     Ok(if failures > 0 { 1 } else { 0 })
 }

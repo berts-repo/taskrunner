@@ -64,3 +64,33 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8
 }
 
 use wait_timeout::ChildExt;
+
+/// Removes every container carrying `label` and returns how many went away.
+/// For the throwaway containers taskrunner starts itself, which a daemon
+/// killed mid-use can leave behind. The label filter is the whole safety
+/// story: without it this would be `docker rm -f` against every container on
+/// the host. `what` names the kind in error messages.
+pub fn remove_labelled_containers(
+    docker: &str,
+    label: &str,
+    what: &str,
+    timeout: Duration,
+) -> anyhow::Result<usize> {
+    let listed = run(docker, &["ps", "-aq", "--filter", &format!("label={label}")], timeout);
+    if !listed.ok {
+        anyhow::bail!("docker ps failed while reaping {what} containers: {}", listed.stderr.trim());
+    }
+    let listed = listed.text();
+    let ids: Vec<&str> = listed.lines().map(str::trim).filter(|id| !id.is_empty()).collect();
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let removed = run(docker, &[&["rm", "-f"][..], &ids[..]].concat(), timeout);
+    if !removed.ok {
+        anyhow::bail!(
+            "docker rm failed while reaping {what} containers: {}",
+            removed.stderr.trim()
+        );
+    }
+    Ok(ids.len())
+}

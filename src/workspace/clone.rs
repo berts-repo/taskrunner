@@ -17,12 +17,23 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::git::{Inspection, WorkspaceGit, git};
+use super::git::{InspectWith, Inspection, WorkspaceGit, git};
 use crate::domain::errors::{ErrorCode, ToolError};
 use crate::ids::{IdPrefix, new_id};
 use crate::storage::Recorder;
 use crate::storage::artifacts::ArtifactStore;
 use crate::storage::events::EventBody;
+
+/// What reading a finished turn's workspace back found.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AfterTurn {
+    /// The paths git saw change.
+    pub changed_files: Vec<String>,
+    /// Why the workspace couldn't be read back, when it couldn't. Then no diff
+    /// or commits were captured, and the turn's result has to say so rather
+    /// than look like a turn that changed nothing.
+    pub inspection_error: Option<String>,
+}
 
 /// Provides the per-task isolated workspace.
 pub trait WorkspaceProvider: Send + Sync {
@@ -30,13 +41,15 @@ pub trait WorkspaceProvider: Send + Sync {
     /// Post-turn: records the diff artifact, lands committed work on the host
     /// repository, and reports the paths git saw change — which is the whole
     /// truth about the workspace, whatever the worker said it touched.
+    /// `with` is what the inspection runs with: the worker's image and limits.
     fn after_turn(
         &self,
         task_id: &str,
         turn_id: &str,
         workspace_dir: &Path,
         project_root: &Path,
-    ) -> Vec<String>;
+        with: &InspectWith,
+    ) -> AfterTurn;
 }
 
 pub struct CloneWorkspaces {
@@ -188,12 +201,13 @@ impl WorkspaceProvider for CloneWorkspaces {
         turn_id: &str,
         workspace_dir: &Path,
         project_root: &Path,
-    ) -> Vec<String> {
+        with: &InspectWith,
+    ) -> AfterTurn {
         let out_dir = self.workspaces_dir.join(format!(".inspect-{turn_id}"));
         let _ = fs::remove_dir_all(&out_dir);
         if let Err(err) = fs::create_dir_all(&out_dir) {
-            eprintln!("taskrunner: could not prepare the workspace inspection: {err}");
-            return vec![];
+            let error = format!("could not prepare the inspection: {err}");
+            return AfterTurn { changed_files: vec![], inspection_error: Some(error) };
         }
         // The inspection may run as another user (the container's), so it has
         // to be able to write its results here.
@@ -201,9 +215,8 @@ impl WorkspaceProvider for CloneWorkspaces {
 
         let base = fs::read_to_string(self.base_file(task_id)).unwrap_or_default();
         let branch = format!("taskrunner/{task_id}");
-        if let Err(err) = self.git.inspect(workspace_dir, &out_dir, base.trim(), &branch) {
-            eprintln!("taskrunner: could not inspect the task workspace: {err}");
-        }
+        let inspection_error =
+            self.git.inspect(workspace_dir, &out_dir, base.trim(), &branch, turn_id, with).err();
 
         let inspection = Inspection::read(&out_dir);
         if !inspection.diff.is_empty()
@@ -215,6 +228,6 @@ impl WorkspaceProvider for CloneWorkspaces {
             self.land_bundle(task_id, project_root, &out_dir, tip);
         }
         let _ = fs::remove_dir_all(&out_dir);
-        inspection.changed_files
+        AfterTurn { changed_files: inspection.changed_files, inspection_error }
     }
 }

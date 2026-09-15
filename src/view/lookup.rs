@@ -11,13 +11,14 @@ use crate::domain::errors::ToolError;
 use crate::domain::tasks::{
     MessageLimit, MessagePage, MessageQuery, SearchFilters, SessionInfo, SessionListQuery,
     SessionOutline, TaskSnapshot, TranscriptHit, TurnInfo, find_project_by_path,
-    get_session_messages, get_session_outline, get_task_messages, get_task_outline,
-    get_task_snapshot, get_turn_artifacts, get_turn_audit, list_sessions, list_task_snapshots,
-    list_turns, search_messages,
+    get_inspection_error, get_session_messages, get_session_outline, get_task_messages,
+    get_task_outline, get_task_snapshot, get_turn_artifacts, get_turn_audit, list_sessions,
+    list_task_snapshots, list_turns, search_messages,
 };
 use crate::js;
 use crate::storage::artifacts::ArtifactStore;
 use crate::storage::index::StateIndex;
+use crate::view::render::inspection_warning;
 use crate::view::transcript::{
     DEFAULT_TOOL_LINES, MessageView, TranscriptView, compact_payload, render_messages,
     render_outline, truncate,
@@ -147,7 +148,14 @@ fn lookup_single_task(
     let turns = apply_scope(list_turns(index, task_id)?, args.scope.as_ref(), task_id)?;
     let has = |field| args.include.contains(&field);
 
-    let mut sections = vec![render_summary(&snapshot)];
+    let mut summary = render_summary(&snapshot);
+    if let Some(turn) = &snapshot.latest_turn
+        && let Some(error) = get_inspection_error(index, &turn.turn_id)?
+    {
+        summary.push('\n');
+        summary.push_str(&inspection_warning(&error));
+    }
+    let mut sections = vec![summary];
     if has(Include::Turns) {
         sections.push(render_exchanges(&turns));
     }
