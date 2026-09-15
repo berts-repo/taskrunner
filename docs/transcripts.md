@@ -93,6 +93,7 @@ taskrunner search "proxy" --last-sessions 5               # …within your last 
 
 taskrunner task <id> --include transcript    # one task's interior, same views
 taskrunner tasks --project /path             # a project's recent tasks
+taskrunner wait <task-id>                    # wait for a task's turn to end, then a short result
 ```
 
 Search prints an exchange number on every hit, so the loop is the same two steps here:

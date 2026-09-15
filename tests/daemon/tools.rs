@@ -315,3 +315,60 @@ async fn a_turn_whose_workspace_could_not_be_read_back_says_so() {
     assert!(lookup.contains(warning), "{lookup}");
     st.close().await;
 }
+
+/// `taskrunner wait` against this stack's daemon.
+async fn wait_cli(st: &Stack, args: &[&str]) -> std::process::Output {
+    tokio::process::Command::new(crate::taskrunner_bin())
+        .arg("wait")
+        .args(args)
+        .arg("--state-root")
+        .arg(&st.paths.root)
+        .output()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn taskrunner_wait_prints_a_short_result_once_the_turn_ends() {
+    let st = stack().await;
+    let project = st.project.path().to_string_lossy().into_owned();
+    let assign = text(
+        &st.call(
+            "assign-task",
+            json!({ "project": project, "worker": "fake", "prompt": "sleep:300 then report" }),
+        )
+        .await,
+    );
+    let out = wait_cli(&st, &[&task_id_in(&assign)]).await;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("status: completed"), "{stdout}");
+    assert!(stdout.contains("summary: echo: sleep:300 then report"), "{stdout}");
+    assert!(stdout.contains("full result: lookup-task"), "{stdout}");
+    st.close().await;
+}
+
+#[tokio::test]
+async fn taskrunner_wait_gives_up_at_its_timeout_and_refuses_an_unknown_task() {
+    let st = stack().await;
+    let project = st.project.path().to_string_lossy().into_owned();
+    let assign = text(
+        &st.call(
+            "assign-task",
+            json!({ "project": project, "worker": "fake", "prompt": "sleep:10000" }),
+        )
+        .await,
+    );
+    let task_id = task_id_in(&assign);
+    let out = wait_cli(&st, &[&task_id, "--timeout", "1"]).await;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(2), "{stdout}");
+    assert!(stdout.contains("still running"), "{stdout}");
+
+    let unknown = wait_cli(&st, &["task_nope"]).await;
+    assert_eq!(unknown.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("no task task_nope"));
+
+    st.call("cancel-task", json!({ "taskId": task_id })).await;
+    st.close().await;
+}

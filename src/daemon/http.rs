@@ -3,6 +3,8 @@
 //! without spending an MCP session. They call the exact same renderers as the
 //! tools, so output is identical.
 
+use std::time::Duration;
+
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -17,6 +19,7 @@ use crate::view::lookup::{
     Include, LookupArgs, LookupDeps, Scope, SessionLookupArgs, ViewArgs, lookup_session,
     lookup_task, search_transcripts,
 };
+use crate::view::render::render_wait;
 use crate::view::transcript::{TRANSCRIPT_VIEWS, TranscriptView};
 
 pub fn router(daemon: Daemon) -> Router {
@@ -25,6 +28,7 @@ pub fn router(daemon: Daemon) -> Router {
         .route("/lookup-session", get(|s, q| read(s, q, Route::LookupSession)))
         .route("/search-transcripts", get(|s, q| read(s, q, Route::SearchTranscripts)))
         .route("/lookup-task", get(|s, q| read(s, q, Route::LookupTask)))
+        .route("/wait-task", get(wait_task))
         .fallback(|| async { (StatusCode::NOT_FOUND, r#"{"error":"not_found"}"#) })
         .with_state(daemon)
 }
@@ -145,19 +149,43 @@ async fn read(
             ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], text)
                 .into_response()
         }
-        Err(err) => {
-            let status = match err.code {
-                ErrorCode::NotFound => StatusCode::NOT_FOUND,
-                ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (
-                status,
-                [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                format!("{err}\n"),
-            )
+        Err(err) => tool_error(err),
+    }
+}
+
+fn tool_error(err: ToolError) -> Response {
+    let status = match err.code {
+        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], format!("{err}\n"))
+        .into_response()
+}
+
+/// Long-polls a task: answers when its running turn ends, or once `timeout`
+/// seconds pass, with the short result `taskrunner wait` prints. JSON, so the
+/// CLI takes its exit code from the status field rather than from the text.
+async fn wait_task(
+    State(daemon): State<Daemon>,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Response {
+    let q = Params(params);
+    let waited = async {
+        let task_id =
+            q.text("taskId").ok_or_else(|| ToolError::invalid_request("taskId is required"))?;
+        let timeout = q.whole("timeout")?.map(|secs| Duration::from_secs(secs as u64));
+        daemon.scheduler.wait_for(&task_id, timeout).await
+    }
+    .await;
+    match waited {
+        Ok(outcome) => {
+            let body =
+                serde_json::json!({ "status": outcome.status, "text": render_wait(&outcome) });
+            ([(axum::http::header::CONTENT_TYPE, "application/json")], body.to_string())
                 .into_response()
         }
+        Err(err) => tool_error(err),
     }
 }
 

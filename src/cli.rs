@@ -32,6 +32,10 @@ Commands:
   mcp [--host claude|codex|hermes]
             Run the stdio MCP shim (auto-starts the daemon). --host names the
             harness it serves.
+  wait <task-id> [--timeout S]
+            Wait until a delegated task's running turn ends, then print a short
+            result. Exit 0 completed, 1 failed or canceled, 2 still running
+            when --timeout (seconds) ran out.
 
 Query (read the ingested corpus without an MCP session):
   sessions [--project P] [--limit N]
@@ -207,6 +211,13 @@ pub async fn main(argv: &[String]) -> i32 {
             SyncOptions::parse(args.flag("connect"), args.flag("skip"), args.flag("delegation"))
                 .and_then(|options| run_sync(&args.paths, &options))
         }
+        Some("wait") => {
+            let Some(id) = args.rest.first() else {
+                eprintln!("taskrunner: wait <task-id> requires a task id");
+                return 1;
+            };
+            wait_task(&args.paths, id, args.flag("timeout")).await
+        }
         Some("sessions") => {
             read_query(
                 &args.paths,
@@ -361,4 +372,50 @@ async fn status(paths: &StatePaths) -> anyhow::Result<i32> {
         if tasks.is_empty() { "none".to_string() } else { tasks }
     ))?;
     Ok(0)
+}
+
+/// How long one wait request may block. The CLI keeps asking in rounds, so a
+/// single HTTP request never has to outlive a daemon restart by much.
+const WAIT_ROUND_SECS: u64 = 300;
+
+/// Blocks until a task's running turn ends (or `--timeout` seconds pass) and
+/// prints the short result. Silent until then: it is meant to run in the
+/// background and cost one notification when it ends.
+async fn wait_task(
+    paths: &StatePaths,
+    task_id: &str,
+    timeout: Option<String>,
+) -> anyhow::Result<i32> {
+    let limit = match timeout {
+        None => None,
+        Some(secs) => {
+            Some(secs.parse::<u64>().context("--timeout must be a whole number of seconds")?)
+        }
+    };
+    let started = Instant::now();
+    loop {
+        let left = limit.map(|limit| limit.saturating_sub(started.elapsed().as_secs()));
+        let round = left.map_or(WAIT_ROUND_SECS, |left| left.min(WAIT_ROUND_SECS));
+        let path = format!("/wait-task?taskId={}&timeout={round}", url_encode(task_id));
+        let Ok(res) = client::get(&paths.socket_path, &path, Duration::from_secs(round + 30)).await
+        else {
+            say("taskrunner daemon is not running\n")?;
+            return Ok(1);
+        };
+        if !res.ok() {
+            eprint!("taskrunner: {}", res.body);
+            return Ok(1);
+        }
+        let body: serde_json::Value = serde_json::from_str(&res.body)?;
+        let status = body["status"].as_str().unwrap_or_default();
+        let running = status == "running" || status == "created";
+        if !running || left == Some(0) || limit.is_some_and(|l| started.elapsed().as_secs() >= l) {
+            say(body["text"].as_str().unwrap_or_default())?;
+            return Ok(match status {
+                "completed" => 0,
+                _ if running => 2,
+                _ => 1,
+            });
+        }
+    }
 }

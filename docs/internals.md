@@ -40,6 +40,9 @@ maintainer reference — the "why it's built this way" behind the features descr
 - **The tool contract is data.** `src/daemon/tools.json` holds the six tools' names,
   descriptions and input schemas, served verbatim and used to validate every call.
   Invalid arguments are a protocol error: the tool never runs and nothing is audited.
+- **`/wait-task` long-polls.** It answers when the task's running turn ends (the same
+  watch `wait: true` uses) or its `timeout` passes, as JSON `{status, text}` so
+  `taskrunner wait` takes its exit code from a field. The CLI asks in 5-minute rounds.
 - **Skills are compiled in and leave two ways.** `skills/<name>/SKILL.md` is embedded
   in the binary (`src/skills.rs`), and `delegate-task`'s description is rendered from
   the host's `delegation` setting. Over MCP the daemon declares the resources

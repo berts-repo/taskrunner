@@ -37,8 +37,14 @@ off. Then wait. Never start a task the user has not agreed to.
 ## Assign
 
 `assign-task` with the absolute project path, the worker, and the prompt. For a
-short task pass `wait: true`. For a long one, leave `wait` off, tell the user it is
-running, and check later with `lookup-task` and the task id.
+short task pass `wait: true`. For a long one, leave `wait` off and tell the user it is
+running. Then:
+
+- **If you can run a shell command in the background and are told when it ends**
+  (Claude Code can), run `taskrunner wait <task-id>` that way. It prints nothing
+  until the task finishes, then a short result — status, branch, one-line summary —
+  so you can review it without the user having to ask. Don't poll as well.
+- **Otherwise**, check with `lookup-task` and the task id when the user asks.
 
 ## Review the result
 

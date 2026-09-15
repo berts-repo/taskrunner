@@ -81,6 +81,41 @@ pub fn render_outcome(outcome: &TurnOutcome) -> String {
     lines.join("\n")
 }
 
+/// The short result `taskrunner wait` prints when a wait ends. It lands in an
+/// agent's context, so it carries only enough to decide what to read next.
+pub fn render_wait(outcome: &TurnOutcome) -> String {
+    let mut lines =
+        vec![format!("task: {}", outcome.task_id), format!("status: {}", outcome.status)];
+    if let Some(branch) = &outcome.branch {
+        lines.push(format!("branch: {branch} (not merged — review it before merging)"));
+    }
+    if let Some(error) = &outcome.inspection_error {
+        lines.push(inspection_warning(error));
+    }
+    if let Some(error) = &outcome.error {
+        lines.push(format!("error {}: {}", error.code, error.message));
+    }
+    if !outcome.changed_files.is_empty() {
+        lines.push(format!("changed files: {}", outcome.changed_files.len()));
+    }
+    let first_line =
+        outcome.summary.as_deref().and_then(|s| s.lines().find(|l| !l.trim().is_empty()));
+    if let Some(line) = first_line {
+        let short: String = line.chars().take(200).collect();
+        let cut = if line.chars().count() > 200 { "…" } else { "" };
+        lines.push(format!("summary: {short}{cut}"));
+    }
+    if outcome.status == "running" || outcome.status == "created" {
+        lines.push("still running: wait again, or check with lookup-task later".to_string());
+    } else {
+        lines.push(format!(
+            "full result: lookup-task {} with include [\"turns\", \"diff\"]",
+            outcome.task_id
+        ));
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
 pub fn render_cancel(result: &CancelResult) -> String {
     let mut lines = vec![format!("task: {}", result.task_id), format!("status: {}", result.status)];
     match &result.turn_id {

@@ -284,6 +284,27 @@ impl Scheduler {
         })
     }
 
+    /// Waits until the task has no running turn, or `timeout` passes, then
+    /// reports its outcome. With no timeout it waits as long as the turn runs;
+    /// every turn has its own time limit.
+    pub async fn wait_for(
+        &self,
+        task_id: &str,
+        timeout: Option<Duration>,
+    ) -> Result<TurnOutcome, ToolError> {
+        self.snapshot_for(task_id)?;
+        let entry = self.running.lock().unwrap_or_else(|p| p.into_inner()).get(task_id).cloned();
+        if let Some(entry) = entry {
+            match timeout {
+                Some(timeout) => {
+                    let _ = tokio::time::timeout(timeout, entry.wait()).await;
+                }
+                None => entry.wait().await,
+            }
+        }
+        self.outcome(task_id)
+    }
+
     pub fn has_running_turn(&self, task_id: &str) -> bool {
         self.running.lock().unwrap_or_else(|p| p.into_inner()).contains_key(task_id)
     }

@@ -30,6 +30,10 @@ result lists them under **not included**, so your agent can ask whether to commi
 If Taskrunner can't read the worker's copy back afterwards, the result and the task's
 summary carry a **warning**: that turn's diff and commits weren't captured.
 
+To be told when a task finishes without keeping your agent busy, `taskrunner wait <task>`
+blocks until the turn ends and prints a short result (status, branch, one-line summary).
+An agent that can run background commands uses it that way.
+
 ### `lookup-task` — see what happened
 
 Fetches a task. By default you get a compact summary (status, worker, how many
