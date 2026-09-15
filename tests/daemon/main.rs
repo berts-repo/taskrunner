@@ -118,6 +118,43 @@ async fn prints_usage_and_exits_0_for_every_way_of_asking_for_help() {
 }
 
 #[tokio::test]
+async fn verify_passes_an_untouched_log_and_a_saved_anchor_then_fails_an_edited_log() {
+    let (_dir, paths) = short_root();
+    let mut log = EventLog::open(&paths.events_log).unwrap();
+    for n in 0..3 {
+        log.append(EventBody::SessionEnded { session_id: format!("sess_{n}") }).unwrap();
+    }
+    drop(log);
+    let run = |args: Vec<String>| {
+        let root = paths.root.clone();
+        async move {
+            let out = tokio::process::Command::new(taskrunner_bin())
+                .args(args)
+                .arg("--state-root")
+                .arg(root)
+                .output()
+                .await
+                .unwrap();
+            (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+        }
+    };
+
+    let (code, saved) = run(vec!["anchor".into()]).await;
+    assert_eq!(code, Some(0));
+    assert!(saved.starts_with("event 3 "), "{saved}");
+
+    let (code, out) = run(vec!["verify".into(), "--anchor".into(), saved.trim().into()]).await;
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("Your anchor: matches event 3"), "{out}");
+
+    let text = std::fs::read_to_string(&paths.events_log).unwrap();
+    std::fs::write(&paths.events_log, text.replace("sess_1", "sess_X")).unwrap();
+    let (code, out) = run(vec!["verify".into()]).await;
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("NOT verified"), "{out}");
+}
+
+#[tokio::test]
 async fn a_query_command_exits_cleanly_when_its_reader_closes_the_pipe() {
     let (_dir, paths) = short_root();
     let daemon = start(&paths).await;

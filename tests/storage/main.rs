@@ -4,6 +4,7 @@
 mod helpers;
 
 mod artifacts;
+mod chain;
 mod events;
 mod facts;
 mod index;

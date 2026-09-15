@@ -378,6 +378,14 @@ impl Daemon {
         self.scheduler.shutdown().await;
         let mut tasks = self.tasks.lock().await;
         while tasks.join_next().await.is_some() {}
+        // Anchor the log as it closes, so the automatic anchors reach its last event.
+        {
+            let mut store = self.store.lock();
+            match store.log.flush() {
+                Ok(()) => store.log.anchor(),
+                Err(err) => eprintln!("taskrunner: could not flush the event log: {err}"),
+            }
+        }
         let _ = fs::remove_file(&self.paths.socket_path);
         let _ = fs::remove_file(&self.paths.mcp_socket_path);
         lock::release(&self.paths);

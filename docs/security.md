@@ -134,6 +134,10 @@ after the fact, you can always establish what a task actually did.
 Read it back with the lookup tools or from the terminal — see
 [Conversation archive](transcripts.md).
 
+The record is tamper-evident: every entry is chained to all the entries before it by a
+fingerprint, so an edit, deletion or reordering shows up when you run
+`taskrunner verify`. See [Proving the record hasn't changed](log-integrity.md).
+
 The flip side: transcripts are stored in plain text under your home directory. Whatever
 appears in a conversation — including a secret a worker printed — is on disk until you
 delete it.
@@ -158,6 +162,9 @@ Worth knowing before you delegate something sensitive.
   hijacked task can get.
 - **Committed secrets are visible**, as above. So is anything reachable on an allowed
   domain with the worker's own credentials.
+- **Tamper evidence reveals changes to the record; it does not prevent them.** Someone
+  with root on your machine can rewrite the record and its local anchors together. Only
+  an anchor you keep off the machine catches that.
 
 ## Sensible practice
 

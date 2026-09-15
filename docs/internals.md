@@ -18,6 +18,12 @@ maintainer reference — the "why it's built this way" behind the features descr
   repopulates a fresh index from `events.jsonl`. (Most recently, bumping 6 → 7 to add
   the per-message tool facts and prompt index needed no migration and no re-sweep for
   exactly this reason — the log already held the content they are derived from.)
+- **The log is hash-chained and anchored.** Each line carries `prev`, the fingerprint of
+  every line before it, and the daemon appends the current fingerprint to
+  `anchors.jsonl` on open, every 100 durable events and on stop. `storage/chain.rs`
+  holds the fingerprint, the walk and `verify`; the log writer only adds `prev` and
+  anchors. Format, rules and the pre-chain history are in
+  [Proving the record hasn't changed](log-integrity.md#technical-details).
 - **Artifacts are content-addressed.** Diffs and raw worker event streams are stored
   by hash, referenced from the index.
 

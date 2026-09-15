@@ -116,26 +116,6 @@ narrows the blast radius, it does not replace the boundary. Vaulting (encrypt in
 place, recover with a key) was considered and rejected for now: a key on the same
 machine gains little over plaintext.
 
-## Decided: the log is hash-chained from line 1
-
-Append-only is a promise the code keeps, not something the file proves. Each event
-carries the SHA-256 of the previous event; editing, deleting or reordering any past
-line breaks the chain at that point and `taskrunner verify` finds it in one pass.
-Same mechanism as git commit parents and certificate-transparency logs.
-
-What it does not do on its own: stop someone re-hashing everything after their edit,
-or detect truncation at the tail. Both need an **anchor** — the current chain head
-written somewhere the log writer cannot reach. Simplest: the daemon appends the head
-to a second file every N events; stronger anchors (a git commit, a line in a
-notebook, a friend's copy) are the user's choice. The chain proves a record has not
-changed since it was written — not that it was true when written.
-
-It was to start with the Rust port; the port shipped without it, because formats
-were frozen for the port, so it is now the redesign's first change to the event
-writer. Every event written before then is unchained history — a "trust me" zone
-that grows until chaining starts, and re-hashing it later is exactly the act the
-chain exists to make suspicious. Cost: one field per line, under 5% of the log.
-
 ## Decided: every harness is both a host and a worker
 
 Hermes is a worker as well as a host: `[worker.hermes]` — an image, its headless
@@ -368,9 +348,6 @@ Clean and readable is a goal of the redesign, not a nicety after it.
   `user,assistant` (tool output is noise unless asked for) and hides automation
   sessions from discovery. Taskrunner's `search-transcripts` has the same noise
   problem with worker turns; worth copying.
-- **Anchoring the pre-chain log.** Chaining starts after the port, so the log
-  already holds unchained history. Whether its hash becomes the first link, and
-  where that hash is anchored, needs deciding before the first chained event.
 - **Daemon as a service.** systemd user unit / launchd, install and uninstall
   commands, what a stop does to a running task. Small, but it gates host capture and
   `taskrunner shell`.

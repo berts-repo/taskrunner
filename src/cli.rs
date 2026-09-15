@@ -16,6 +16,7 @@ use crate::daemon::{AlreadyRunning, Daemon, DaemonOptions};
 use crate::doctor::run_doctor;
 use crate::paths::{StatePaths, default_root, state_paths};
 use crate::shim::run_shim;
+use crate::storage::chain::{self, Claim};
 use crate::sync::{SyncOptions, run_sync};
 
 pub const USAGE: &str = "Usage: taskrunner <command> [args] [--state-root <dir>]
@@ -36,6 +37,11 @@ Commands:
             Wait until a delegated task's running turn ends, then print a short
             result. Exit 0 completed, 1 failed or canceled, 2 still running
             when --timeout (seconds) ran out.
+  verify [--anchor \"<saved line>\"]
+            Check that the event log has not changed: its chain, every
+            automatic anchor, and an anchor you saved. Exit 0 verified, 1 not.
+  anchor    Print the log's current fingerprint, to keep off this machine and
+            check later with verify --anchor.
 
 Query (read the ingested corpus without an MCP session):
   sessions [--project P] [--limit N]
@@ -138,6 +144,30 @@ async fn read_query(
     }
 }
 
+/// Reads the files directly rather than asking the daemon, so the record can
+/// be checked with the daemon stopped.
+fn verify_log(paths: &StatePaths, saved: Option<String>) -> anyhow::Result<i32> {
+    let claim = match saved {
+        None => None,
+        Some(text) => Some(
+            Claim::parse(&text)
+                .context("--anchor needs a fingerprint like sha256:<64 hex digits>")?,
+        ),
+    };
+    let report = chain::verify(&paths.events_log, claim.as_ref())?;
+    say(&report.render())?;
+    Ok(if report.ok() { 0 } else { 1 })
+}
+
+fn print_anchor(paths: &StatePaths) -> anyhow::Result<i32> {
+    let Some(anchor) = chain::current(&paths.events_log)? else {
+        eprintln!("taskrunner: the event log is empty; there is nothing to anchor yet");
+        return Ok(1);
+    };
+    say(&format!("{}\n", anchor.display()))?;
+    Ok(0)
+}
+
 /// `URLSearchParams` encoding: application/x-www-form-urlencoded.
 fn url_encode(value: &str) -> String {
     let mut out = String::new();
@@ -222,6 +252,8 @@ pub async fn main(argv: &[String]) -> i32 {
             };
             wait_task(&args.paths, id, args.flag("timeout")).await
         }
+        Some("verify") => verify_log(&args.paths, args.flag("anchor")),
+        Some("anchor") => print_anchor(&args.paths),
         Some("sessions") => {
             read_query(
                 &args.paths,

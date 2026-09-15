@@ -53,6 +53,8 @@ login, is in the getting-started guide.
   what gets recorded.
 - **[Conversation archive](docs/transcripts.md)** — what Taskrunner records, how to
   read it back, and how worker logins are stored.
+- **[Proving the record hasn't changed](docs/log-integrity.md)** — how the record is
+  chained and anchored, and how to check it with `taskrunner verify`.
 - **[Custom & local-model workers](docs/workers.md)** — add your own worker, including
   an offline local model.
 

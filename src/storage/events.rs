@@ -1,6 +1,7 @@
 //! Every durable record is one JSONL line appended to the event log first;
 //! SQLite is a derived index folded from these events. All timestamps that
 //! reach the index come from event `ts` fields so rebuilds are deterministic.
+//! Each line is also linked to every line before it and anchored; see `chain`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::chain::{self, Anchor};
 use crate::ids::{IdPrefix, new_id};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +269,13 @@ pub fn now_iso() -> String {
 pub struct EventLog {
     pub path: PathBuf,
     file: File,
+    /// The fingerprint of every line so far: the next line's `prev`.
+    head: String,
+    events: u64,
+    last_id: String,
+    last_ts: String,
+    /// The last event an anchor covers.
+    anchored: u64,
 }
 
 impl EventLog {
@@ -276,7 +285,21 @@ impl EventLog {
         }
         repair_torn_tail(path)?;
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(EventLog { path: path.to_path_buf(), file })
+        let walk = chain::walk(path, |_, _| {})?;
+        let anchors = chain::read_anchors(&chain::anchors_path(path))?;
+        let mut log = EventLog {
+            path: path.to_path_buf(),
+            file,
+            head: walk.head,
+            events: walk.events,
+            last_id: walk.last_id,
+            last_ts: walk.last_ts,
+            anchored: anchors.anchors.last().map_or(0, |anchor| anchor.event),
+        };
+        // The first time a log written before chaining is opened, this anchors
+        // all of that history.
+        log.anchor();
+        Ok(log)
     }
 
     /// Assigns id/ts, appends one JSONL line, fsyncs, returns the full event.
@@ -287,6 +310,7 @@ impl EventLog {
     pub fn append(&mut self, body: EventBody) -> io::Result<LogEvent> {
         let event = self.append_unsynced(body)?;
         self.file.sync_all()?;
+        self.anchor_if_due();
         Ok(event)
     }
 
@@ -296,14 +320,60 @@ impl EventLog {
     /// `flush()` once at the end.
     pub fn append_unsynced(&mut self, body: EventBody) -> io::Result<LogEvent> {
         let event = LogEvent { id: new_id(IdPrefix::Event), ts: now_iso(), body };
-        let mut line = serde_json::to_string(&event).expect("event bodies always serialize");
-        line.push('\n');
-        self.file.write_all(line.as_bytes())?;
+        let line = self.linked_line(&event);
+        self.file.write_all(format!("{line}\n").as_bytes())?;
+        self.head = chain::fingerprint(&self.head, line.as_bytes());
+        self.events += 1;
+        self.last_id.clone_from(&event.id);
+        self.last_ts.clone_from(&event.ts);
         Ok(event)
     }
 
     /// Forces every prior append durable, including unsynced ones.
     pub fn flush(&mut self) -> io::Result<()> {
-        self.file.sync_all()
+        self.file.sync_all()?;
+        self.anchor_if_due();
+        Ok(())
+    }
+
+    /// Appends the log's current fingerprint to the anchors file, unless the
+    /// latest anchor already covers the last event. Call it only once every
+    /// append is durable. A failed write is reported, never fatal: the events
+    /// are already safe in the log, and the next anchor covers them too.
+    pub fn anchor(&mut self) {
+        if self.events == 0 || self.events == self.anchored {
+            return;
+        }
+        let anchor = Anchor {
+            event: self.events,
+            id: self.last_id.clone(),
+            ts: self.last_ts.clone(),
+            fingerprint: self.head.clone(),
+        };
+        match chain::write_anchor(&chain::anchors_path(&self.path), &anchor) {
+            Ok(()) => self.anchored = self.events,
+            Err(err) => {
+                eprintln!("taskrunner: could not write an anchor for event {}: {err}", self.events)
+            }
+        }
+    }
+
+    fn anchor_if_due(&mut self) {
+        if self.events.saturating_sub(self.anchored) >= chain::ANCHOR_EVERY {
+            self.anchor();
+        }
+    }
+
+    /// The event as one JSON line, linked to every line before it. `prev` is
+    /// the line's place in the file rather than part of the event, so
+    /// `LogEvent` leaves it out and the index never sees it.
+    fn linked_line(&self, event: &LogEvent) -> String {
+        let mut line = serde_json::to_value(event).expect("event bodies always serialize");
+        if !self.head.is_empty() {
+            line.as_object_mut()
+                .expect("an event is a JSON object")
+                .insert("prev".into(), self.head.clone().into());
+        }
+        line.to_string()
     }
 }
