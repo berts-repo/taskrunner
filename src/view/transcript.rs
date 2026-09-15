@@ -234,9 +234,14 @@ fn message_body(m: &TranscriptMessage, tool_lines: usize) -> String {
 /// the audit record, and `--tool-lines` already bounds it.
 fn tool_use_body(m: &TranscriptMessage) -> String {
     let input = js::parse_object_text(&m.content)
-        .and_then(|blob| js::first_present(&blob, &["input", "arguments"]).cloned())
-        .and_then(|value| js::parse_object(&value));
-    let Some(input) = input else {
+        .and_then(|blob| js::first_present(&blob, &["input", "arguments"]).cloned());
+    // Codex's exec takes a program, not named arguments: the program is the body.
+    if let Some(Value::String(program)) = &input
+        && js::parse_object_text(program).is_none()
+    {
+        return js::trim_end(program).to_string();
+    }
+    let Some(input) = input.and_then(|value| js::parse_object(&value)) else {
         return m.tool_target.clone().unwrap_or_default();
     };
     let mut lines: Vec<String> = Vec::new();

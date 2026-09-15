@@ -273,6 +273,47 @@ fn tolerates_a_source_dir_that_does_not_exist() {
     assert!(h.logs.lock().unwrap().is_empty());
 }
 
+#[test]
+fn logs_the_records_a_parser_does_not_recognise_once_per_new_line() {
+    // A harness that renames a record type must not vanish from the archive
+    // silently: that is how Codex's tool calls went missing.
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("codex");
+    fs::create_dir_all(&dir).unwrap();
+    let stack = stack(root.path());
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let sink = logs.clone();
+    let sweeper = TranscriptSweeper::new(SweeperDeps {
+        sources: vec![IngestSource {
+            format: "codex".into(),
+            dirs: vec![dir.to_string_lossy().into_owned()],
+            ..Default::default()
+        }],
+        archive: Box::new(Shared(stack.clone())),
+        state_file: stack.state_file.clone(),
+        staging_dir: None,
+        copy_volume: None,
+        on_log: Some(Box::new(move |m| sink.lock().unwrap().push(m.to_string()))),
+    });
+    let meta = json!({ "type": "session_meta", "payload": { "id": "cs1" } }).to_string();
+    let future = json!({ "type": "response_item", "payload": { "type": "future_call" } });
+    let usage = json!({ "type": "token_usage_record", "payload": {} }).to_string();
+    write(
+        &dir.join("rollout-2026-01-01T00-00-00-11111111-2222-3333-4444-555555555555.jsonl"),
+        &[meta, future.to_string(), future.to_string(), usage],
+    );
+
+    sweeper.sweep(false);
+    let logged = logs.lock().unwrap().clone();
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert!(logged[0].contains("response_item/future_call ×2"), "{logged:?}");
+    assert!(!logged[0].contains("token_usage_record"), "{logged:?}");
+
+    // Lines already read are not parsed again, so they are not reported again.
+    sweeper.sweep(false);
+    assert_eq!(logs.lock().unwrap().len(), 1);
+}
+
 // ---- volume sources -------------------------------------------------------
 
 struct VolumeHarness {

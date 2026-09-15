@@ -5,3 +5,5 @@
 {"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"hmm"}]}}
 {"type":"event_msg","payload":{"type":"x"}}
 {"type":"turn_context","payload":{"cwd":"/proj2"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:05Z","payload":{"type":"custom_tool_call","id":"ctc_1","status":"completed","call_id":"c2","name":"exec","input":"text(await tools.exec_command({cmd:\"ls\"}));\n"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:06Z","payload":{"type":"custom_tool_call_output","id":"ctco_1","call_id":"c2","output":[{"type":"input_text","text":"Script completed\nOutput:\n"},{"type":"input_text","text":"file.txt"}]}}

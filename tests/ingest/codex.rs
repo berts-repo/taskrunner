@@ -1,6 +1,8 @@
 // One rollout file in the shape Codex writes, with its expected parse in
 // expected.json. The filename carries the session id.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 use taskrunner::ingest::codex::CodexParser;
 use taskrunner::ingest::parser::{FileContext, ParsedMessage, TranscriptParser};
@@ -26,6 +28,8 @@ struct Lines {
     reasoning: String,
     event_msg: String,
     turn_context: String,
+    custom_call: String,
+    custom_output: String,
 }
 
 fn lines() -> Lines {
@@ -39,6 +43,8 @@ fn lines() -> Lines {
         reasoning: next(),
         event_msg: next(),
         turn_context: next(),
+        custom_call: next(),
+        custom_output: next(),
     }
 }
 
@@ -92,6 +98,56 @@ fn gives_a_function_call_and_its_output_distinct_record_ids() {
     assert_eq!(output[0].kind, "tool_result");
     let blob: Value = serde_json::from_str(&output[0].content).unwrap();
     assert_eq!(blob, json!({ "call_id": "c1", "output": "file.txt" }));
+}
+
+#[test]
+fn reads_a_custom_tool_call_and_its_output_like_a_function_call() {
+    // Codex 0.154 writes most tool calls this way: `exec` takes a JavaScript
+    // program as its input rather than JSON arguments.
+    let l = lines();
+    let mut c = ctx(0);
+    parse(&l.meta, &mut c);
+    let call = parse(&l.custom_call, &mut c);
+    let output = parse(&l.custom_output, &mut c);
+    assert_eq!((call[0].kind.as_str(), call[0].native_record_id.as_str()), ("tool_use", "ctc_1"));
+    let blob: Value = serde_json::from_str(&call[0].content).unwrap();
+    assert_eq!(
+        blob,
+        json!({ "call_id": "c2", "name": "exec", "input": "text(await tools.exec_command({cmd:\"ls\"}));\n" })
+    );
+    assert_eq!(
+        (output[0].kind.as_str(), output[0].role.as_str(), output[0].native_record_id.as_str()),
+        ("tool_result", "tool", "ctco_1")
+    );
+    let blob: Value = serde_json::from_str(&output[0].content).unwrap();
+    assert_eq!(blob, json!({ "call_id": "c2", "output": "Script completed\nOutput:\n\nfile.txt" }));
+}
+
+#[test]
+fn counts_the_records_it_does_not_recognise_but_not_the_ones_it_skips_on_purpose() {
+    let l = lines();
+    let mut c = ctx(0);
+    for line in [&l.meta, &l.message, &l.event_msg, &l.turn_context, &l.custom_call] {
+        parse(line, &mut c);
+    }
+    parse(&json!({ "type": "token_usage_record", "payload": {} }).to_string(), &mut c);
+    parse(&json!({ "type": "world_state", "payload": {} }).to_string(), &mut c);
+    parse("", &mut c);
+    assert!(c.unrecognised.is_empty(), "{:?}", c.unrecognised);
+
+    let future_item = json!({ "type": "response_item", "payload": { "type": "future_call" } });
+    parse(&future_item.to_string(), &mut c);
+    parse(&future_item.to_string(), &mut c);
+    parse(&json!({ "type": "future_record" }).to_string(), &mut c);
+    parse("{not json", &mut c);
+    assert_eq!(
+        c.unrecognised,
+        BTreeMap::from([
+            ("(not json)".to_string(), 1),
+            ("future_record".to_string(), 1),
+            ("response_item/future_call".to_string(), 2),
+        ])
+    );
 }
 
 #[test]

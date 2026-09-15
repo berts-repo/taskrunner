@@ -6,8 +6,10 @@
 //! timestamp }; older versions flatten the payload, so both shapes are read.
 //!
 //! Conversation lives in response_item records (message / function_call /
-//! function_call_output / reasoning). event_msg records duplicate that stream
-//! for the live UI and are skipped; turn_context only carries cwd updates.
+//! custom_tool_call and their outputs / reasoning). event_msg records
+//! duplicate that stream for the live UI and are skipped, as are token counts
+//! and environment snapshots; turn_context only carries cwd updates. Any other
+//! record type is counted on the file context so a format change is reported.
 
 use std::path::{Path, PathBuf};
 
@@ -36,7 +38,13 @@ impl TranscriptParser for CodexParser {
 
     fn parse(&self, line: &str, ctx: &mut FileContext) -> Vec<ParsedMessage> {
         let trimmed = js::trim(line);
-        let Ok(record) = serde_json::from_str::<Value>(trimmed) else { return vec![] };
+        if trimmed.is_empty() {
+            return vec![];
+        }
+        let Ok(record) = serde_json::from_str::<Value>(trimmed) else {
+            ctx.note_unrecognised("(not json)");
+            return vec![];
+        };
         // payload nests the record body in current Codex; flat records expose
         // it at the top level. Read whichever carries the fields.
         let body = match record.get("payload") {
@@ -71,7 +79,13 @@ impl TranscriptParser for CodexParser {
                 return vec![];
             }
             Some("response_item") => {}
-            _ => return vec![], // event_msg is a live-UI duplicate of response_item
+            // A live-UI duplicate of response_item, token counts, and an
+            // environment snapshot: none of them is conversation.
+            Some("event_msg" | "token_usage_record" | "world_state") => return vec![],
+            other => {
+                ctx.note_unrecognised(other.unwrap_or("(no type)"));
+                return vec![];
+            }
         }
 
         if ctx.session_id.is_none() {
@@ -108,7 +122,12 @@ impl TranscriptParser for CodexParser {
                 "tool_use",
                 json_of_keys(body, &["call_id", "name", "arguments"]),
             ),
-            Some("function_call_output") => {
+            // exec, the tool most calls go through, takes a JavaScript program
+            // as its input rather than JSON arguments.
+            Some("custom_tool_call") => {
+                message("assistant", "tool_use", json_of_keys(body, &["call_id", "name", "input"]))
+            }
+            Some("function_call_output" | "custom_tool_call_output") => {
                 let mut result = serde_json::Map::new();
                 if let Some(call_id) = body.get("call_id") {
                     result.insert("call_id".into(), call_id.clone());
@@ -126,7 +145,10 @@ impl TranscriptParser for CodexParser {
                 }
                 message("assistant", "reasoning", text)
             }
-            _ => vec![],
+            other => {
+                ctx.note_unrecognised(&format!("response_item/{}", other.unwrap_or("(no type)")));
+                vec![]
+            }
         }
     }
 }

@@ -4,6 +4,7 @@
 //! session, so the sweeper can resume mid-file and replay the persisted
 //! context instead of re-reading a session header it has already passed.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -43,11 +44,18 @@ pub struct FileContext {
     pub line_index: usize,
     pub session_id: Option<String>,
     pub project_path: Option<String>,
+    /// Record types this parser skipped because it does not know them, with
+    /// how many of each. Not persisted: it covers only the lines read this sweep.
+    pub unrecognised: BTreeMap<String, usize>,
 }
 
 impl FileContext {
     pub fn new(file_path: &Path) -> FileContext {
         FileContext { file_path: file_path.to_path_buf(), ..Default::default() }
+    }
+
+    pub fn note_unrecognised(&mut self, record_type: &str) {
+        *self.unrecognised.entry(record_type.to_string()).or_default() += 1;
     }
 }
 
@@ -58,7 +66,8 @@ pub trait TranscriptParser: Send + Sync {
     /// Parses one transcript line into zero or more messages, mutating `ctx`
     /// with any session/project context the line establishes. Returns nothing
     /// for noise, header-only, and unparseable lines — the format is
-    /// unversioned, so unknown shapes are tolerated, never fatal.
+    /// unversioned, so unknown shapes are tolerated, never fatal. A line
+    /// skipped only because its type is unknown goes in `ctx.unrecognised`.
     fn parse(&self, line: &str, ctx: &mut FileContext) -> Vec<ParsedMessage>;
 }
 

@@ -109,6 +109,13 @@ table for search.
   such guard**, so the fold inserts into `messages_fts` only when the `messages`
   insert actually changed a row (the insert's changed-row count) — otherwise a rebuild would
   double-index every re-swept message.
+- **Unknown record types are reported, not silently dropped.** A parser counts every
+  line it skips only because it does not know the record type, and the sweeper logs
+  the counts per file (`ingest: codex: skipped records it does not recognise in …:
+  response_item/foo ×3`). Types skipped on purpose are listed in the parser and not
+  counted. This exists because Codex 0.154 moved most tool calls to
+  `custom_tool_call`, and for a while they reached the archive as nothing at all.
+  Only newly read lines are parsed, so each line is reported once.
 - **Byte offsets are a cache only.** `~/.taskrunner/ingest-state.json` records how far
   each source was read to make resumption incremental; deleting it forces a harmless
   full re-scan, and the event log stays the sole source of truth.
@@ -137,7 +144,9 @@ content blob at projection time — `tool_use_id`, `tool_name`, `tool_target`,
 - **Structural, not source-switched.** `source` is free-form and new harnesses appear,
   so each fact is read from whichever known field spelling is present (claude-code's
   `id`/`tool_use_id`/`input`, codex's `call_id`/`arguments`, which also arrives as a
-  nested JSON *string*). An unrecognized shape yields nulls, never a throw.
+  nested JSON *string*). An unrecognized shape yields nulls, never a throw. Codex's
+  `exec` passes a JavaScript program as `input`; it is not an object, so the call
+  keeps its id and name but no `tool_target`, and the program is shown whole.
 - **A target is an identifier, not a sentence.** `TARGET_KEYS` is an ordered list,
   most specific first; prose keys (`description`, `prompt`, `explanation`) are excluded
   on purpose, which is why prose-only tools legitimately have no `tool_target`. Codex

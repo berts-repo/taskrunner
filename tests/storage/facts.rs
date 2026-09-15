@@ -1,6 +1,7 @@
 // Shapes here are copied from real archived records: claude-code writes
 // {id,name,input} / {tool_use_id,is_error,content}; codex writes
-// {call_id,name,arguments} / {call_id,output} with arguments as a JSON string.
+// {call_id,name,arguments} / {call_id,output} with arguments as a JSON string,
+// or {call_id,name,input} for exec, whose input is a JavaScript program.
 
 use serde_json::{Value, json};
 use taskrunner::storage::facts::{MessageFacts, message_facts};
@@ -37,6 +38,28 @@ fn reads_call_id_name_and_target_off_a_codex_tool_use() {
     assert_eq!(facts.tool_use_id.as_deref(), Some("call_rMXEMl9x6Wc7H9ujPIY6syLY"));
     assert_eq!(facts.tool_name.as_deref(), Some("exec_command"));
     assert_eq!(facts.tool_target.as_deref(), Some("ls -la ~/.codex"));
+}
+
+#[test]
+fn pairs_a_codex_exec_call_with_its_output_but_takes_no_target_from_its_program() {
+    // exec's input is a JavaScript program that may run several tools, so no
+    // one identifier names what it acted on. The program stays searchable.
+    let call = json!({
+        "call_id": "call_7x6PhysrjXuQGZ6ovHfcRKi8",
+        "name": "exec",
+        "input": "text(await tools.exec_command({cmd:\"rg -n XDG src\"}));\n",
+    });
+    let facts = message_facts("assistant", "tool_use", &call.to_string());
+    assert_eq!(facts.tool_use_id.as_deref(), Some("call_7x6PhysrjXuQGZ6ovHfcRKi8"));
+    assert_eq!(facts.tool_name.as_deref(), Some("exec"));
+    assert_eq!(facts.tool_target, None);
+
+    let result = result_facts(json!({
+        "call_id": "call_7x6PhysrjXuQGZ6ovHfcRKi8",
+        "output": "Script completed\nWall time 0.2 seconds\nOutput:\n\n{\"exit_code\":2}",
+    }));
+    assert_eq!(result.tool_use_id.as_deref(), Some("call_7x6PhysrjXuQGZ6ovHfcRKi8"));
+    assert_eq!(result.is_error, None);
 }
 
 #[test]

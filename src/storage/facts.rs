@@ -10,7 +10,8 @@
 //! Deliberately structural, not source-switched: `source` is free-form and new
 //! harnesses appear, so each fact is read from whichever of the known field
 //! spellings is present (claude-code's `id`/`tool_use_id`/`input`, codex's
-//! `call_id`/`arguments`). An unrecognized shape yields nulls, never a panic.
+//! `call_id`/`arguments`, or `input` holding a program). An unrecognized shape
+//! yields nulls, never a panic.
 //!
 //! String handling mirrors JavaScript on purpose (its whitespace set, UTF-16
 //! slicing): the archive's facts were first derived that way, and a rebuilt

@@ -31,5 +31,23 @@
     "role": "assistant",
     "kind": "reasoning",
     "content": "hmm"
+  },
+  {
+    "nativeSessionId": "cs1",
+    "nativeRecordId": "ctc_1",
+    "nativeTs": "2026-01-01T00:00:05Z",
+    "projectPath": "/proj2",
+    "role": "assistant",
+    "kind": "tool_use",
+    "content": "{\"call_id\":\"c2\",\"name\":\"exec\",\"input\":\"text(await tools.exec_command({cmd:\\\"ls\\\"}));\\n\"}"
+  },
+  {
+    "nativeSessionId": "cs1",
+    "nativeRecordId": "ctco_1",
+    "nativeTs": "2026-01-01T00:00:06Z",
+    "projectPath": "/proj2",
+    "role": "tool",
+    "kind": "tool_result",
+    "content": "{\"call_id\":\"c2\",\"output\":\"Script completed\\nOutput:\\n\\nfile.txt\"}"
   }
 ]

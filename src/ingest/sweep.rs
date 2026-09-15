@@ -209,6 +209,7 @@ impl TranscriptSweeper {
             line_index: resume.line_index,
             session_id: resume.session_id.filter(|s| !s.is_empty()),
             project_path: resume.project_path.filter(|p| !p.is_empty()),
+            unrecognised: BTreeMap::new(),
         };
 
         let mut pos = resume.offset;
@@ -236,6 +237,17 @@ impl TranscriptSweeper {
             }
             pos += newline + 1;
             ctx.line_index += 1;
+        }
+        // A harness that renames a record type would otherwise drop out of the
+        // archive with no sign anything changed.
+        if !ctx.unrecognised.is_empty() {
+            let counts: Vec<String> =
+                ctx.unrecognised.iter().map(|(kind, n)| format!("{kind} ×{n}")).collect();
+            self.log(&format!(
+                "ingest: {format}: skipped records it does not recognise in {}: {}",
+                file.display(),
+                counts.join(", ")
+            ));
         }
 
         state.insert(

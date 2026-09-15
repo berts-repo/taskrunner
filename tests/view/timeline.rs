@@ -133,6 +133,28 @@ fn renders_compact_lines_in_the_pre_phase_2_shape() {
 }
 
 #[test]
+fn shows_the_program_a_codex_exec_call_ran() {
+    // exec takes a JavaScript program as its input, not named arguments; the
+    // program is the record of what the call did.
+    let s = Seed::new();
+    let program = "const r = await tools.exec_command({cmd:\"ls -la\"});\ntext(r);";
+    let index = s.index(vec![
+        project_created(),
+        s.msg("user", "message", "list the tree"),
+        s.msg(
+            "assistant",
+            "tool_use",
+            &json!({ "call_id": "call_1", "name": "exec", "input": program }).to_string(),
+        ),
+    ]);
+    let out = timeline(&index);
+    assert!(out.contains("· exec"), "{out}");
+    for line in program.lines() {
+        assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    }
+}
+
+#[test]
 fn labels_a_tool_call_by_name_and_shows_its_target_and_remaining_input() {
     let out = timeline(&seeded());
     assert!(out.contains("── Claude · Read"));
