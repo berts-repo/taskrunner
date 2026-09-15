@@ -240,6 +240,7 @@ impl ServerHandler for McpService {
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         self.ensure_started(&context.peer);
+        self.audit("resources.list", json!({}));
         let resources = self
             .skills()
             .into_iter()

@@ -122,8 +122,8 @@ Each worker signs in once, into its own storage that only that worker uses.
 Taskrunner keeps a durable audit trail, which is a security feature in its own right —
 after the fact, you can always establish what a task actually did.
 
-- **Every tool call your agent makes**, with its arguments, and every request for
-  Taskrunner's skills, with the agent that asked.
+- **Every tool call your agent makes**, with its arguments, and every successful
+  request that lists or reads Taskrunner's skills, with the agent that asked.
 - **Every event inside a worker turn** — each command, edit, and message, streamed as
   it happens, so even a crashed turn keeps its partial trail.
 - **Every network attempt**, allowed or refused.

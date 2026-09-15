@@ -79,22 +79,27 @@ pub fn uncommitted_files(project_root: &Path) -> Vec<String> {
 /// branch. Every command is read-only except `add -N`, which only marks
 /// untracked files in the clone's own disposable index so that files the turn
 /// *created* show up in the diff rather than silently missing from the record.
-/// Failures are left to the host to notice as a missing or empty file: this
-/// runs where a hostile `.git` can make git do odd things, so it reports
-/// nothing it would have to be trusted about.
+/// A failure that would leave the record empty — `status`, `diff`, the task
+/// branch — stops the script, so the host reports it rather than reading it as
+/// a turn that changed nothing. The messages are fixed text: git's own stderr
+/// here comes from a `.git` the worker controlled, so none of it is passed on.
 pub const INSPECT_SCRIPT: &str = r#"
 set -u
 ws=$1; out=$2; base=$3; branch=$4
-cd "$ws" || exit 1
+fail() { echo "taskrunner-inspect: $1" >&2; exit 4; }
+cd "$ws" || fail "cannot enter the workspace"
 command -v git >/dev/null 2>&1 || { echo "taskrunner-inspect: no git" >&2; exit 3; }
 # safe.directory: the clone is owned by the host user, and this may run as
 # another; it is command-line config, which a repository's own config cannot
 # override.
 g() { git -c safe.directory='*' --no-pager "$@"; }
-g status --porcelain=v1 -z --untracked-files=all > "$out/status" 2>/dev/null
+g status --porcelain=v1 -z --untracked-files=all > "$out/status" 2>/dev/null || fail "git status failed"
 g add -A -N >/dev/null 2>&1
-g diff --no-ext-diff --no-textconv HEAD > "$out/diff" 2>/dev/null
-g rev-parse --verify -q "refs/heads/$branch" > "$out/tip" 2>/dev/null
+# A repository with no commits yet has nothing to diff against and no branch tip.
+if g rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  g diff --no-ext-diff --no-textconv HEAD > "$out/diff" 2>/dev/null || fail "git diff failed"
+  g rev-parse --verify -q "refs/heads/$branch" > "$out/tip" 2>/dev/null || fail "the task branch $branch is gone"
+fi
 if [ -n "$base" ]; then
   g bundle create "$out/bundle" "refs/heads/$branch" --not "$base" >/dev/null 2>&1 || rm -f "$out/bundle"
 else
@@ -452,5 +457,41 @@ mod tests {
         let calls = fs::read_to_string(log).unwrap();
         assert!(calls.contains(&format!("ps -aq --filter label={INSPECT_LABEL}")), "{calls}");
         assert!(calls.contains("rm -f stale1"), "{calls}");
+    }
+
+    #[test]
+    fn an_inspection_that_cannot_read_the_repository_fails_instead_of_reporting_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, out) = (dir.path().join("ws"), dir.path().join("out"));
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let git_in = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&ws)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        let inspect = || {
+            HostGit.inspect(&ws, &out, "", "taskrunner/task_1", "turn_1", &InspectWith::default())
+        };
+        git_in(&["init", "-q", "-b", "taskrunner/task_1"]);
+        fs::write(ws.join("a.txt"), "a\n").unwrap();
+        git_in(&["add", "a.txt"]);
+        git_in(&["commit", "-qm", "first"]);
+        inspect().unwrap();
+
+        // The turn moved off its branch and deleted it: its commits can't land.
+        git_in(&["checkout", "-qb", "elsewhere"]);
+        git_in(&["branch", "-qD", "taskrunner/task_1"]);
+        assert!(inspect().unwrap_err().contains("the task branch taskrunner/task_1 is gone"));
+
+        // The turn broke the repository outright.
+        fs::write(ws.join(".git/HEAD"), "garbage\n").unwrap();
+        assert!(inspect().unwrap_err().contains("git status failed"));
     }
 }

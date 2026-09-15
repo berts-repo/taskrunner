@@ -27,8 +27,8 @@ maintainer reference — the "why it's built this way" behind the features descr
   to one daemon's `runtime/mcp.sock`, auto-starting the daemon if needed, so any
   number of MCP clients share one daemon.
 - **A connection can name its harness.** `taskrunner mcp --host <name>` makes the shim
-  send one line, `taskrunner-host <name>`, before any JSON-RPC. The daemon reads it (a
-  first byte of `{` means there is none) and records `host` on `session.started`
+  send one line, `taskrunner-host <name>`, before any JSON-RPC. The daemon reads it (only a first byte of `t`
+  starts one) and records `host` on `session.started`
   (index schema 8). It labels the session, for rendering skills and for the audit
   trail; the owner-only socket is still the only access control.
 - **A connection is a session.** Each connection gets its own MCP service and its own
@@ -53,7 +53,8 @@ maintainer reference — the "why it's built this way" behind the features descr
   pre-final client checks. For harnesses that can't fetch skills yet, `taskrunner sync`
   writes the same rendering under `skills/<host>/` as read-only files and links it into
   the harness; the daemon rewrites those files on boot, so an upgrade needs no sync.
-  Skills requests are audited (`skills.list`, `skills.get`, `resource.read`); a
+  Skills requests are audited (`skills.list`, `skills.get`,
+  `resources.list`, `resource.read`); a
   `skills.list` from a host within the last week is how sync knows to drop that host's
   links. A week rather than the latest session, because `claude mcp get` health-checks
   the server with a session that fetches nothing.

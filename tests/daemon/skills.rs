@@ -2,6 +2,8 @@
 //! socket: the capability, `skills/list`, `skills/get`, the skill resources,
 //! rendering per host, and the audit record sync reads.
 
+use std::time::Duration;
+
 use rmcp::ServiceExt;
 use rmcp::model::{
     ClientInfo, ClientRequest, CustomRequest, ReadResourceRequestParams, ResourceContents,
@@ -91,6 +93,17 @@ async fn declares_the_extension_and_serves_every_skill_with_matching_digests() {
 
     let listed = client.peer().list_all_resources().await.unwrap();
     assert_eq!(listed.len(), 4);
+    let audited: Vec<String> = read_events(&paths.events_log)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.body {
+            EventBody::AuditRecorded { kind, .. } => Some(kind),
+            _ => None,
+        })
+        .collect();
+    for kind in ["skills.list", "resource.read", "resources.list"] {
+        assert!(audited.iter().any(|k| k == kind), "{kind} not audited: {audited:?}");
+    }
 
     client.cancel().await.unwrap();
     daemon.stop().await;
@@ -148,6 +161,23 @@ async fn skills_get_answers_for_a_served_skill_and_refuses_what_it_does_not_serv
     assert!(unread.is_err());
     assert!(custom(&client, "skills/nothing", json!({})).await.is_err());
 
+    client.cancel().await.unwrap();
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_client_whose_first_message_starts_with_whitespace_is_still_served() {
+    let (_dir, paths, daemon) = daemon_with("").await;
+    let mut stream = tokio::net::UnixStream::connect(&paths.mcp_socket_path).await.unwrap();
+    // Valid JSON-RPC may lead with whitespace; it is not a host line.
+    stream.write_all(b" ").await.unwrap();
+    let (reader, writer) = stream.into_split();
+    let client =
+        tokio::time::timeout(Duration::from_secs(5), client_info("spaced").serve((reader, writer)))
+            .await
+            .expect("the initialize message was swallowed")
+            .unwrap();
+    client.peer().list_tools(None).await.unwrap();
     client.cancel().await.unwrap();
     daemon.stop().await;
 }

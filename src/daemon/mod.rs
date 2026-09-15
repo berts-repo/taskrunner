@@ -82,12 +82,13 @@ use crate::config::{Config, HostKind, load_config, worker_config};
 /// harness the connection was registered for.
 pub const HOST_PREAMBLE: &str = "taskrunner-host ";
 
-/// Reads the host preamble, if the client sent one. JSON-RPC lines start with
-/// `{`, so any other first byte is the preamble. A client that sends none — a
-/// direct connection, or a registration made before `--host` existed — is
-/// served unlabelled.
+/// Reads the host preamble, if the client sent one. It starts with `t`, which
+/// no JSON-RPC message does — not even one with leading whitespace — so only
+/// that first byte hands a line to this reader instead of the MCP decoder. A
+/// client that sends none (a direct connection, or a registration made before
+/// `--host` existed) is served unlabelled.
 async fn read_host_preamble(reader: &mut BufReader<OwnedReadHalf>) -> Option<HostKind> {
-    if *reader.fill_buf().await.ok()?.first()? == b'{' {
+    if *reader.fill_buf().await.ok()?.first()? != b't' {
         return None;
     }
     let mut line = String::new();

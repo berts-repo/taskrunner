@@ -262,9 +262,11 @@ fn check_harnesses(config: &Config, paths: &StatePaths, checks: &mut Vec<Check>)
                 registration,
                 "taskrunner is not registered; run taskrunner sync",
             ),
-            Registration::Outdated { .. } => {
-                check(Level::Warn, registration, "registered without --host; run taskrunner sync")
-            }
+            Registration::Outdated { .. } => check(
+                Level::Warn,
+                registration,
+                "registered with other arguments, or its taskrunner is gone; run taskrunner sync",
+            ),
         });
         let skills = format!("{label} skills");
         if sync::gets_skills_over_mcp(paths, host) {

@@ -98,8 +98,16 @@ pub fn render_wait(outcome: &TurnOutcome) -> String {
     if !outcome.changed_files.is_empty() {
         lines.push(format!("changed files: {}", outcome.changed_files.len()));
     }
-    let first_line =
-        outcome.summary.as_deref().and_then(|s| s.lines().find(|l| !l.trim().is_empty()));
+    // The first line of real text: a reply that opens with a heading
+    // (`## Findings`) says nothing on its own.
+    let first_line = outcome.summary.as_deref().and_then(|summary| {
+        let lines: Vec<&str> = summary.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        lines
+            .iter()
+            .find(|line| !line.starts_with('#'))
+            .or(lines.first())
+            .map(|line| line.trim_start_matches('#').replace("**", "").trim().to_string())
+    });
     if let Some(line) = first_line {
         let short: String = line.chars().take(200).collect();
         let cut = if line.chars().count() > 200 { "…" } else { "" };
@@ -123,4 +131,37 @@ pub fn render_cancel(result: &CancelResult) -> String {
         None => lines.push("no turn was running".to_string()),
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completed_with(summary: &str) -> TurnOutcome {
+        TurnOutcome {
+            task_id: "task_1".into(),
+            turn_id: None,
+            status: "completed".into(),
+            worker: "codex".into(),
+            worker_session_id: None,
+            tier: None,
+            approval_state: "none".into(),
+            summary: Some(summary.into()),
+            changed_files: vec![],
+            artifacts: vec![],
+            error: None,
+            branch: None,
+            uncommitted: vec![],
+            inspection_error: None,
+        }
+    }
+
+    #[test]
+    fn the_wait_summary_skips_headings_and_bold() {
+        let report = "## Findings\n\n1. **Medium — inspection can fail silently**\n";
+        let text = render_wait(&completed_with(report));
+        assert!(text.contains("summary: 1. Medium — inspection can fail silently\n"), "{text}");
+        let text = render_wait(&completed_with("# Only a heading"));
+        assert!(text.contains("summary: Only a heading\n"), "{text}");
+    }
 }

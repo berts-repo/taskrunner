@@ -23,9 +23,14 @@ case "$1 $2" in
     if [ -f "$HOME/claude-signed-out" ]; then echo '{"loggedIn": false}'; else echo '{"loggedIn": true}'; fi ;;
   "mcp get")
     [ -f "$HOME/claude-mcp" ] || exit 1
-    printf 'taskrunner:\n  Command: /opt/taskrunner\n  Args: %s\n' "$(cat "$HOME/claude-mcp")" ;;
+    set -- $(cat "$HOME/claude-mcp")
+    command=$1; shift
+    printf 'taskrunner:\n  Command: %s\n  Args: %s\n' "$command" "$*" ;;
   "mcp remove") rm -f "$HOME/claude-mcp" ;;
-  "mcp add") shift 7; echo "$*" > "$HOME/claude-mcp" ;;
+  "mcp add")
+    shift 6
+    if [ -f "$HOME/add-refuses-host" ] && echo "$*" | grep -q -- --host; then echo "add refused" >&2; exit 1; fi
+    echo "$*" > "$HOME/claude-mcp" ;;
 esac
 "#;
 
@@ -34,10 +39,16 @@ case "$1 $2" in
   "login status") echo "Logged in using ChatGPT" ;;
   "mcp get")
     [ -f "$HOME/codex-mcp" ] || exit 1
-    args=$(sed 's/[^ ][^ ]*/"&"/g; s/" "/", "/g' "$HOME/codex-mcp")
-    printf '{"transport":{"command":"/opt/taskrunner","args":[%s]}}\n' "$args" ;;
+    set -- $(cat "$HOME/codex-mcp")
+    command=$1; shift
+    args=""
+    for arg in "$@"; do args="$args${args:+, }\"$arg\""; done
+    printf '{"transport":{"command":"%s","args":[%s]}}\n' "$command" "$args" ;;
   "mcp remove") rm -f "$HOME/codex-mcp" ;;
-  "mcp add") shift 5; echo "$*" > "$HOME/codex-mcp" ;;
+  "mcp add")
+    shift 4
+    if [ -f "$HOME/add-refuses-host" ] && echo "$*" | grep -q -- --host; then echo "add refused" >&2; exit 1; fi
+    echo "$*" > "$HOME/codex-mcp" ;;
 esac
 "#;
 
@@ -110,8 +121,8 @@ fn connects_a_harness_once_and_a_second_run_changes_nothing() {
     assert!(config.contains("[host.codex]\nconnected = false"));
 
     let registered = fs::read_to_string(m.home.join("claude-mcp")).unwrap();
-    let expected = format!("mcp --host claude --state-root {}", m.state.display());
-    assert_eq!(registered.trim(), expected);
+    let expected = format!(" mcp --host claude --state-root {}", m.state.display());
+    assert!(registered.trim_end().ends_with(&expected), "{registered}");
 
     let skill = m.state.join("skills/claude/delegate-task");
     assert_eq!(link_target(&m.claude_skill("delegate-task")), Some(skill.clone()));
@@ -130,13 +141,42 @@ fn connects_a_harness_once_and_a_second_run_changes_nothing() {
 fn replaces_a_registration_made_before_hosts_existed() {
     let m = machine();
     m.install("codex", CODEX);
-    fs::write(m.home.join("codex-mcp"), "mcp\n").unwrap();
+    fs::write(m.home.join("codex-mcp"), "/gone/taskrunner mcp\n").unwrap();
 
     let out = m.sync(&["--connect", "codex"]);
     // The old registration's command no longer exists, so sync picks a real one.
     assert!(out.contains("codex: registered taskrunner: "), "{out}");
     assert!(out.contains(" mcp --host codex --state-root "), "{out}");
-    assert!(fs::read_to_string(m.home.join("codex-mcp")).unwrap().starts_with("mcp --host codex"));
+    let registered = fs::read_to_string(m.home.join("codex-mcp")).unwrap();
+    assert!(!registered.starts_with("/gone/") && registered.contains(" mcp --host codex"));
+}
+
+#[test]
+fn a_registration_whose_taskrunner_is_gone_is_not_current() {
+    let m = machine();
+    m.install("codex", CODEX);
+    let args = format!("mcp --host codex --state-root {}", m.state.display());
+    fs::write(m.home.join("codex-mcp"), format!("/gone/taskrunner {args}\n")).unwrap();
+
+    let out = m.sync(&["--connect", "codex"]);
+    assert!(out.contains("codex: registered taskrunner: "), "{out}");
+    let registered = fs::read_to_string(m.home.join("codex-mcp")).unwrap();
+    assert!(!registered.starts_with("/gone/"), "{registered}");
+    assert!(registered.trim_end().ends_with(&args), "{registered}");
+}
+
+#[test]
+fn a_refused_replacement_puts_the_previous_registration_back() {
+    let m = machine();
+    m.install("codex", CODEX);
+    fs::write(m.home.join("add-refuses-host"), "").unwrap();
+    let old = format!("{} mcp\n", m.bin.join("codex").display());
+    fs::write(m.home.join("codex-mcp"), &old).unwrap();
+
+    let out = m.sync(&["--connect", "codex"]);
+    assert!(out.contains("registering taskrunner failed: add refused"), "{out}");
+    assert!(out.contains("put the previous registration back"), "{out}");
+    assert_eq!(fs::read_to_string(m.home.join("codex-mcp")).unwrap(), old);
 }
 
 #[test]
@@ -197,10 +237,11 @@ fn hermes_gets_the_lines_to_add_and_its_config_is_never_edited() {
     assert!(m.state.join("skills/hermes/delegate-task/SKILL.md").exists());
 
     let skills = m.state.join("skills/hermes");
+    let hermes_command = m.bin.join("hermes").display().to_string();
     fs::write(
         &config,
         format!(
-            "{original}  external_dirs:\n    - {}\nmcp_servers:\n  taskrunner:\n    command: /opt/taskrunner\n    args: [mcp, --host, hermes, --state-root, {}]\n",
+            "{original}  external_dirs:\n    - {}\nmcp_servers:\n  taskrunner:\n    command: {hermes_command}\n    args: [mcp, --host, hermes, --state-root, {}]\n",
             skills.display(),
             m.state.display()
         ),
@@ -208,6 +249,7 @@ fn hermes_gets_the_lines_to_add_and_its_config_is_never_edited() {
     .unwrap();
     let again = m.sync(&[]);
     assert!(again.contains("nothing to change"), "{again}");
+    assert!(!again.contains("mcp_servers:"), "{again}");
 }
 
 #[test]

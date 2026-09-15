@@ -152,11 +152,19 @@ pub fn sign_in(host: HostKind) -> SignIn {
 pub enum Registration {
     Current,
     Missing,
-    /// Registered, but not as this host (typically from before `--host`).
-    /// Keeps the command it was registered with.
+    /// Registered, but with other arguments (typically from before `--host`)
+    /// or a taskrunner that no longer exists. Keeps the registration as it
+    /// is, to put back if replacing it fails.
     Outdated {
         command: Option<String>,
+        args: Vec<String>,
     },
+}
+
+/// Whether a registered command can still start: an existing path, or a bare
+/// name found on PATH.
+fn command_exists(command: &str) -> bool {
+    if command.contains('/') { Path::new(command).exists() } else { on_path(command).is_some() }
 }
 
 /// What taskrunner is registered to run: `mcp --host <name>`, plus the state
@@ -180,10 +188,13 @@ pub fn registration(paths: &StatePaths, host: HostKind) -> Registration {
             let field = |name: &str| {
                 ran.stdout.lines().find_map(|line| line.trim().strip_prefix(name)).map(str::trim)
             };
-            if field("Args:").is_some_and(|args| args.split_whitespace().eq(expected.iter())) {
+            let command = field("Command:").map(str::to_string);
+            let args: Vec<String> =
+                field("Args:").unwrap_or_default().split_whitespace().map(str::to_string).collect();
+            if args == expected && command.as_deref().is_some_and(command_exists) {
                 Registration::Current
             } else {
-                Registration::Outdated { command: field("Command:").map(str::to_string) }
+                Registration::Outdated { command, args }
             }
         }
         HostKind::Codex => {
@@ -193,22 +204,31 @@ pub fn registration(paths: &StatePaths, host: HostKind) -> Registration {
             };
             let server: Value = serde_json::from_str(&ran.stdout).unwrap_or_default();
             let transport = &server["transport"];
-            let args = transport["args"].as_array().cloned().unwrap_or_default();
-            if args.iter().map(|a| a.as_str().unwrap_or_default()).eq(expected.iter()) {
+            let command = transport["command"].as_str().map(str::to_string);
+            let args: Vec<String> = transport["args"]
+                .as_array()
+                .map(|args| args.iter().filter_map(|a| a.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            if args == expected && command.as_deref().is_some_and(command_exists) {
                 Registration::Current
             } else {
-                Registration::Outdated {
-                    command: transport["command"].as_str().map(str::to_string),
-                }
+                Registration::Outdated { command, args }
             }
         }
-        HostKind::Hermes => match hermes_config_block(&["mcp_servers", "taskrunner"]) {
-            None => Registration::Missing,
-            Some(block) if expected.iter().all(|arg| block.contains(arg.as_str())) => {
+        HostKind::Hermes => {
+            let Some(block) = hermes_config_block(&["mcp_servers", "taskrunner"]) else {
+                return Registration::Missing;
+            };
+            let command = hermes_config_block(&["mcp_servers", "taskrunner", "command"])
+                .and_then(|value| value.lines().next().map(|line| line.trim().to_string()));
+            if expected.iter().all(|arg| block.contains(arg.as_str()))
+                && command.as_deref().is_some_and(command_exists)
+            {
                 Registration::Current
+            } else {
+                Registration::Outdated { command, args: vec![] }
             }
-            Some(_) => Registration::Outdated { command: None },
-        },
+        }
     }
 }
 
@@ -616,33 +636,62 @@ fn settle_host(
     Ok(Some(settings))
 }
 
-fn register(paths: &StatePaths, host: HostKind, registered: Option<String>, report: &mut Report) {
-    let command = taskrunner_command(registered);
-    let args = mcp_args(paths, host);
-    let scope: &[&str] = if host == HostKind::Claude { &["-s", "user"] } else { &[] };
+/// Registers taskrunner with Claude Code or Codex. Neither CLI replaces an
+/// existing entry, so an outdated one is removed first — and put back if the
+/// new one is refused, so a failed sync never leaves the harness without
+/// taskrunner.
+fn register(paths: &StatePaths, host: HostKind, current: &Registration, report: &mut Report) {
     let program = host.as_str();
-    // Neither CLI replaces an existing entry, so an outdated one goes first.
-    let remove: Vec<&str> =
-        ["mcp", "remove"].into_iter().chain(scope.iter().copied()).chain(["taskrunner"]).collect();
-    let _ = run(program, &remove);
-    let add: Vec<&str> = ["mcp", "add"]
-        .into_iter()
-        .chain(scope.iter().copied())
-        .chain(["taskrunner", "--", &command])
-        .chain(args.iter().map(String::as_str))
-        .collect();
-    match run(program, &add) {
+    let scope: &[&str] = if host == HostKind::Claude { &["-s", "user"] } else { &[] };
+    let add = |command: &str, args: &[String]| -> Vec<String> {
+        ["mcp", "add"]
+            .into_iter()
+            .chain(scope.iter().copied())
+            .chain(["taskrunner", "--", command])
+            .map(str::to_string)
+            .chain(args.iter().cloned())
+            .collect()
+    };
+    let run_all =
+        |argv: &[String]| run(program, &argv.iter().map(String::as_str).collect::<Vec<_>>());
+
+    let previous = match current {
+        Registration::Outdated { command, args } => Some((command.clone(), args.clone())),
+        _ => None,
+    };
+    if previous.is_some() {
+        let remove: Vec<String> = ["mcp", "remove"]
+            .into_iter()
+            .chain(scope.iter().copied())
+            .chain(["taskrunner"])
+            .map(str::to_string)
+            .collect();
+        let _ = run_all(&remove);
+    }
+    let command = taskrunner_command(previous.as_ref().and_then(|(command, _)| command.clone()));
+    let args = mcp_args(paths, host);
+    let refused = match run_all(&add(&command, &args)) {
         Some(ran) if ran.ok => {
-            report.change(host, format!("registered taskrunner: {command} {}", args.join(" ")))
+            report.change(host, format!("registered taskrunner: {command} {}", args.join(" ")));
+            return;
         }
-        Some(ran) => report.note(
-            host,
-            format!(
-                "registering taskrunner failed: {}",
-                format!("{}{}", ran.stdout, ran.stderr).trim()
-            ),
-        ),
-        None => report.note(host, format!("`{program}` did not run")),
+        Some(ran) => format!("{}{}", ran.stdout, ran.stderr).trim().to_string(),
+        None => format!("`{program}` did not run"),
+    };
+    report.note(host, format!("registering taskrunner failed: {refused}"));
+    if let Some((Some(old_command), old_args)) = previous {
+        let restore = add(&old_command, &old_args);
+        if run_all(&restore).is_some_and(|ran| ran.ok) {
+            report.note(host, "put the previous registration back");
+        } else {
+            report.note(
+                host,
+                format!(
+                    "taskrunner is no longer registered; to restore it, run: {program} {}",
+                    restore.join(" ")
+                ),
+            );
+        }
     }
 }
 
@@ -716,8 +765,7 @@ fn sync_host(
     };
     match registration(paths, host) {
         Registration::Current => {}
-        Registration::Missing => register(paths, host, None, report),
-        Registration::Outdated { command } => register(paths, host, command, report),
+        stale => register(paths, host, &stale, report),
     }
     sync_links(paths, host, &dir, over_mcp, report)
 }
