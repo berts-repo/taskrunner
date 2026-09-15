@@ -7,11 +7,6 @@ Things to come back to or possibly remove. Not a build queue.
   says which: move it to `tests/fixtures/` and name the test that uses it, or keep it
   and say why in [Keeping your own anchor](../guide/log-integrity.md#keeping-your-own-anchor)
   · `docs/test-anchor.txt`
-- **"README § Worker sign-in" pointers** · error messages in `src/doctor.rs` and
-  `src/workers/runner.rs`, and a comment in `src/harnesses.rs`, name a README section
-  that doesn't exist; the steps are in
-  [Sign the workers in](../guide/getting-started.md#sign-the-workers-in) · a code
-  change, so fix it in the next change touching those files · those three files
 - **Codex report's HTML twin** · `docs/security/2026-09-13-codex-three-blocked-connections.html`
   (266 KB) is rendered by a script, so its text couldn't be compared with the Markdown
   report · decide whether it duplicates the Markdown (delete it) or is the version to
